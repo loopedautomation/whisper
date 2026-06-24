@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import AVFoundation
+import AppKit
 
 /// Orchestrates the full capture pipeline:
 /// record → (realtime live caption) → transcribe → (rewrite) → clipboard/paste.
@@ -20,6 +21,8 @@ final class Coordinator: ObservableObject {
     private var realtimeTimer: Timer?
     private var realtimeTask: Task<Void, Never>?
     private let hud: HUDPanelController
+    private var escMonitorGlobal: Any?
+    private var escMonitorLocal: Any?
 
     init() {
         let state = AppState()
@@ -104,6 +107,7 @@ final class Coordinator: ObservableObject {
             state.lastWarning = nil
             state.setStatus(.recording)
             if !silent { SoundService.play(.start) }
+            startEscMonitor()
             if currentMode() == .realtime {
                 hud.show()
                 startRealtimePolling()
@@ -115,11 +119,43 @@ final class Coordinator: ObservableObject {
 
     func endRecording(silent: Bool = false) {
         guard state.isRecording else { return }
+        stopEscMonitor()
         stopRealtimePolling()
         let samples = recorder.stop()
         if !silent { SoundService.play(.stop) }
         state.setStatus(.transcribing)
         Task { await finishPipeline(samples: samples) }
+    }
+
+    /// Esc: abort recording without transcribing, and hide the HUD.
+    func cancelRecording() {
+        guard state.isRecording else { return }
+        stopEscMonitor()
+        stopRealtimePolling()
+        _ = recorder.stop()          // discard samples
+        hud.hide()
+        state.clearLive()
+        state.setStatus(.idle)
+    }
+
+    // MARK: - Esc-to-cancel
+
+    private func startEscMonitor() {
+        guard escMonitorGlobal == nil else { return }
+        // Global: Esc pressed while another app is focused (the usual dictation case).
+        escMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { Task { @MainActor in self?.cancelRecording() } }
+        }
+        // Local: Esc pressed while our own window (e.g. the HUD) is focused.
+        escMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            if event.keyCode == 53 { self?.cancelRecording(); return nil }
+            return event
+        }
+    }
+
+    private func stopEscMonitor() {
+        if let m = escMonitorGlobal { NSEvent.removeMonitor(m); escMonitorGlobal = nil }
+        if let m = escMonitorLocal { NSEvent.removeMonitor(m); escMonitorLocal = nil }
     }
 
     // MARK: - realtime polling

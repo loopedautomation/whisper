@@ -19,23 +19,25 @@ struct MenuBarLabel: View {
     private static func icon(for status: AppStatus) -> NSImage {
         switch status {
         case .idle:
-            return badge(key: "idle", background: nil, glyph: .black, template: true)
+            return badge(key: "idle", canvas: idleCanvas, background: nil, glyph: .black, template: true)
         case .recording:
-            return badge(key: "rec", background: BrandColor.recording, glyph: .white, template: false)
+            return badge(key: "rec", canvas: pillCanvas, background: BrandColor.recording, glyph: .white, template: false)
         case .transcribing, .rewriting, .loadingModel:
-            return badge(key: "busy", background: BrandColor.transcribing, glyph: .white, template: false)
+            return badge(key: "busy", canvas: pillCanvas, background: BrandColor.transcribing, glyph: .white, template: false)
         case .error:
-            return badge(key: "err", background: BrandColor.error, glyph: .white, template: false)
+            return badge(key: "err", canvas: pillCanvas, background: BrandColor.error, glyph: .white, template: false)
         }
     }
 
     // MARK: - rendering
 
-    private static let canvas = CGSize(width: 26, height: 18)
-    private static let glyphSize: CGFloat = 16
+    /// Glyph stays a fixed size in every state; only the background pill grows.
+    private static let glyphSize: CGFloat = 17
+    private static let idleCanvas = CGSize(width: 24, height: 22)   // tight, no background
+    private static let pillCanvas = CGSize(width: 36, height: 22)   // full-size pill like macOS
     private static var cache: [String: NSImage] = [:]
 
-    private static func badge(key: String, background: Color?, glyph: Color, template: Bool) -> NSImage {
+    private static func badge(key: String, canvas: CGSize, background: Color?, glyph: Color, template: Bool) -> NSImage {
         if let cached = cache[key] { return cached }
         let view = ZStack {
             if let background {
