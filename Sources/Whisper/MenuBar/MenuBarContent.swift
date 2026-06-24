@@ -30,14 +30,6 @@ struct MenuBarContent: View {
             coordinator.toggleRecording()
         }
 
-        if !state.lastTranscript.isEmpty {
-            Button("Copy Last Transcript") {
-                ClipboardService.set(state.lastTranscript)
-            }
-        }
-
-        Divider()
-
         Picker("Microphone", selection: $audioDevices.selectedUID) {
             Text("System Default").tag(AudioInputDevices.systemDefaultUID)
             if !audioDevices.devices.isEmpty {
@@ -47,6 +39,14 @@ struct MenuBarContent: View {
                 }
             }
         }
+
+        if !state.lastTranscript.isEmpty {
+            Button("Copy Last Transcript") {
+                ClipboardService.set(state.lastTranscript)
+            }
+        }
+
+        Divider()
 
         Text("Model: \(WhisperModel.label(for: selectedModel))")
 
