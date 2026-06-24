@@ -1,5 +1,19 @@
 # looped-whisper
 
+## 0.2.0
+
+### Minor Changes
+
+- e0a6d3d: Add the ability to delete downloaded transcription models from Settings to free up disk space. Deletion asks for confirmation, and the currently active model can’t be deleted.
+- ff568b7: Add a microphone picker to the menu bar dropdown: choose any available input device or follow the macOS system default (which tracks the OS as you change inputs). The selection is persisted across launches.
+- e0a6d3d: Surface clear, user-facing error messages when transcription or AI rewrite models fail to load or run, a model hasn’t been downloaded, or a required permission (microphone, accessibility, input monitoring) hasn’t been granted — instead of failing silently.
+- 4981aea: Menu bar & sound polish: use the Looped brand mark as the menu bar icon (crisp vector template) with a state-colored pill (recording #ED9B00, busy #685EF6, error #D02E1F) matching the macOS mic indicator; add a brand color palette and #685EF6 app accent; add a sound-effects volume slider; make the menu bar model picker functional (installed models only) and move the microphone picker below Start Recording; press Esc to cancel an in-progress recording and hide the live HUD.
+
+### Patch Changes
+
+- e0a6d3d: Show the app as “Looped Whisper” (with a space) in Finder and the Applications folder, instead of “LoopedWhisper”.
+- e0a6d3d: Fix the model rows in Settings so the per-model action buttons (e.g. Reveal in Finder) are no longer hidden behind the scrollbar.
+
 ## 0.1.2
 
 ### Patch Changes
