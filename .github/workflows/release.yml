@@ -20,6 +20,9 @@ jobs:
         with:
           xcode-version: latest-stable
 
+      - name: Install build tools
+        run: brew install xcodegen create-dmg
+
       - name: Import Developer ID certificate
         env:
           CERT_BASE64: ${{ secrets.MACOS_CERTIFICATE_P12_BASE64 }}
@@ -93,16 +96,45 @@ jobs:
           # Staple the ticket into the app so it runs offline without Gatekeeper prompts.
           xcrun stapler staple "build/LoopedWhisper.app"
 
-      - name: Package final artifact
+      - name: Package zip + DMG
+        env:
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER_ID: ${{ secrets.APPLE_API_ISSUER_ID }}
         run: |
           set -euo pipefail
           VERSION="${GITHUB_REF_NAME#v}"
+
+          # Zip of the stapled app.
           ditto -c -k --keepParent "build/LoopedWhisper.app" "LoopedWhisper-${VERSION}.zip"
+
+          # Styled DMG with an /Applications drop target. create-dmg can exit
+          # non-zero even on success, so check for the output file afterwards.
+          create-dmg \
+            --volname "Looped Whisper" \
+            --window-size 600 320 \
+            --icon-size 120 \
+            --icon "LoopedWhisper.app" 150 160 \
+            --app-drop-link 450 160 \
+            --no-internet-enable \
+            "LoopedWhisper-${VERSION}.dmg" \
+            "build/LoopedWhisper.app" || true
+          [ -f "LoopedWhisper-${VERSION}.dmg" ] || { echo "DMG was not created"; exit 1; }
+
+          # Sign the DMG with the Developer ID + timestamp, then notarize & staple it.
+          codesign --force --sign "$SIGN_ID" --timestamp "LoopedWhisper-${VERSION}.dmg"
+          xcrun notarytool submit "LoopedWhisper-${VERSION}.dmg" \
+            --key "$RUNNER_TEMP/api_key.p8" \
+            --key-id "$API_KEY_ID" \
+            --issuer "$API_ISSUER_ID" \
+            --wait
+          xcrun stapler staple "LoopedWhisper-${VERSION}.dmg"
 
       - name: Upload to release
         uses: softprops/action-gh-release@v2
         with:
-          files: LoopedWhisper-*.zip
+          files: |
+            LoopedWhisper-*.zip
+            LoopedWhisper-*.dmg
 
       - name: Update Homebrew tap
         env:
@@ -114,7 +146,7 @@ jobs:
             exit 0
           fi
           VERSION="${GITHUB_REF_NAME#v}"
-          SHA="$(shasum -a 256 "LoopedWhisper-${VERSION}.zip" | awk '{print $1}')"
+          SHA="$(shasum -a 256 "LoopedWhisper-${VERSION}.dmg" | awk '{print $1}')"
 
           git clone "https://x-access-token:${TAP_TOKEN}@github.com/loopedautomation/homebrew-tap.git" tap
           mkdir -p tap/Casks
@@ -123,7 +155,7 @@ jobs:
             version "${VERSION}"
             sha256 "${SHA}"
 
-            url "https://github.com/loopedautomation/whisper/releases/download/v#{version}/LoopedWhisper-#{version}.zip"
+            url "https://github.com/loopedautomation/whisper/releases/download/v#{version}/LoopedWhisper-#{version}.dmg"
             name "Looped Whisper"
             desc "Local voice transcription for macOS — on-device Whisper models"
             homepage "https://github.com/loopedautomation/whisper"
