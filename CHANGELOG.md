@@ -1,5 +1,11 @@
 # looped-whisper
 
+## 0.1.2
+
+### Patch Changes
+
+- cc760ca: Build the app with Xcode so SwiftPM dependency resource bundles are embedded correctly — fixes the crash when opening Settings (the previous fix didn't fully resolve it). Also ship a notarized `.dmg` installer (drag-to-Applications) alongside the zip and Homebrew cask.
+
 ## 0.1.1
 
 ### Patch Changes
