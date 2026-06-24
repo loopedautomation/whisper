@@ -75,3 +75,50 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: LoopedWhisper-*.zip
+
+      - name: Update Homebrew tap
+        env:
+          TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [ -z "${TAP_TOKEN:-}" ]; then
+            echo "No HOMEBREW_TAP_TOKEN set — skipping tap update."
+            exit 0
+          fi
+          VERSION="${GITHUB_REF_NAME#v}"
+          SHA="$(shasum -a 256 "LoopedWhisper-${VERSION}.zip" | awk '{print $1}')"
+
+          git clone "https://x-access-token:${TAP_TOKEN}@github.com/loopedautomation/homebrew-tap.git" tap
+          mkdir -p tap/Casks
+          cat > tap/Casks/looped-whisper.rb <<RUBY
+          cask "looped-whisper" do
+            version "${VERSION}"
+            sha256 "${SHA}"
+
+            url "https://github.com/loopedautomation/whisper/releases/download/v#{version}/LoopedWhisper-#{version}.zip"
+            name "Looped Whisper"
+            desc "Local voice transcription for macOS — on-device Whisper models"
+            homepage "https://github.com/loopedautomation/whisper"
+
+            depends_on macos: ">= :sonoma"
+            depends_on arch: :arm64
+
+            app "LoopedWhisper.app"
+
+            zap trash: [
+              "~/Library/Application Support/Looped Whisper",
+              "~/Library/Preferences/com.looped.whisper.plist",
+            ]
+          end
+          RUBY
+
+          cd tap
+          git config user.name "looped-bot"
+          git config user.email "bot@looped.sh"
+          git add Casks/looped-whisper.rb
+          if git diff --cached --quiet; then
+            echo "Cask already up to date."
+          else
+            git commit -m "looped-whisper ${VERSION}"
+            git push
+          fi

@@ -5,7 +5,7 @@ APP      := build/LoopedWhisper.app
 BIN      := $(APP)/Contents/MacOS/LoopedWhisper
 
 .DEFAULT_GOAL := help
-.PHONY: help build build-debug bundle run run-debug dev test clean resolve fmt icon dev-cert reset-perms
+.PHONY: help build build-debug bundle run run-debug dev test clean resolve fmt icon dev-cert reset-perms tap-sha
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -36,6 +36,10 @@ icon: ## Generate AppIcon.icns from Resources/AppIcon.png
 
 dev-cert: ## Create a stable self-signed signing identity (so TCC grants persist)
 	@./scripts/dev-cert.sh
+
+tap-sha: ## Print the sha256 of a release zip for a Homebrew cask (ZIP=path)
+	@test -n "$(ZIP)" || { echo "Usage: make tap-sha ZIP=LoopedWhisper-0.1.0.zip"; exit 1; }
+	@shasum -a 256 "$(ZIP)" | awk '{print $$1}'
 
 reset-perms: ## Clear stale TCC grants for the app (then relaunch & re-grant)
 	@tccutil reset Accessibility com.looped.whisper || true

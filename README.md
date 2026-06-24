@@ -22,6 +22,16 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 - 📖 **Vocabulary** — bias recognition toward your names / jargon / identifiers.
 - 🔒 Launch at login, menu-bar agent (no Dock icon).
 
+## Install
+
+Once a release is published, install with Homebrew (Apple Silicon, macOS 14+):
+
+```bash
+brew install --cask loopedautomation/tap/looped-whisper
+```
+
+Or download the notarized `.zip` from the [Releases](https://github.com/loopedautomation/whisper/releases) page.
+
 ## Build & run
 
 ```bash
