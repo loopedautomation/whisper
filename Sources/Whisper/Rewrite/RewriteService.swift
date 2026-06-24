@@ -29,20 +29,61 @@ struct RewriteService {
         return template + "\n\n" + transcript
     }
 
+    /// Outcome of a rewrite attempt. Always carries usable `text` (the cleaned
+    /// result, or the raw transcript on failure) plus an optional human-readable
+    /// `failure` reason the caller can surface to the user.
+    struct Outcome {
+        var text: String
+        var failure: String?
+    }
+
     /// Returns the cleaned text, or the original `transcript` on any error.
+    /// Kept for callers that only need the text; see `rewriteResult` for the reason.
     static func rewrite(_ transcript: String, vocabulary: [String], config: Config) async -> String {
-        guard !transcript.isEmpty, !config.apiKey.isEmpty else { return transcript }
+        await rewriteResult(transcript, vocabulary: vocabulary, config: config).text
+    }
+
+    /// Like `rewrite` but reports why the rewrite failed (e.g. bad API key,
+    /// network/timeout, provider error) so the UI can tell the user.
+    static func rewriteResult(_ transcript: String, vocabulary: [String], config: Config) async -> Outcome {
+        guard !transcript.isEmpty else { return Outcome(text: transcript, failure: nil) }
+        guard !config.apiKey.isEmpty else {
+            return Outcome(text: transcript, failure: "No AI API key configured.")
+        }
         do {
+            let cleaned: String
             switch config.provider {
             case .anthropic:
-                return try await callAnthropic(transcript, vocabulary: vocabulary, config: config)
+                cleaned = try await callAnthropic(transcript, vocabulary: vocabulary, config: config)
             case .openaiCompatible(let baseURL):
-                return try await callOpenAI(transcript, vocabulary: vocabulary, baseURL: baseURL, config: config)
+                cleaned = try await callOpenAI(transcript, vocabulary: vocabulary, baseURL: baseURL, config: config)
             }
+            return Outcome(text: cleaned, failure: nil)
         } catch {
+            let reason = friendlyReason(error)
             NSLog("Rewrite failed, using raw transcript: \(error.localizedDescription)")
-            return transcript
+            return Outcome(text: transcript, failure: reason)
         }
+    }
+
+    /// Maps low-level errors to a short, user-readable reason.
+    private static func friendlyReason(_ error: Error) -> String {
+        if let urlError = error as? URLError {
+            switch urlError.code {
+            case .timedOut: return "AI rewrite timed out."
+            case .notConnectedToInternet, .networkConnectionLost:
+                return "AI rewrite failed: no internet connection."
+            default: return "AI rewrite failed: \(urlError.localizedDescription)"
+            }
+        }
+        let desc = error.localizedDescription
+        let lower = desc.lowercased()
+        if lower.contains("authentication") || lower.contains("api key") || lower.contains("unauthorized") || lower.contains("401") {
+            return "AI rewrite failed: check your API key."
+        }
+        // Keep the surfaced reason compact.
+        let trimmed = desc.replacingOccurrences(of: "\n", with: " ")
+        return "AI rewrite failed: \(trimmed.prefix(120))"
     }
 
     /// App-controlled system prompt. Sets the role + guardrails and injects the

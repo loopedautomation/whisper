@@ -51,6 +51,14 @@ final class Coordinator: ObservableObject {
     func configureFnMonitor() {
         fnMonitor.stop()
         guard UserDefaults.standard.bool(forKey: PrefKey.fnEnabled) else { return }
+        // The fn/Globe key tap needs Input Monitoring; without it the shortcut
+        // silently does nothing, so surface an actionable error.
+        permissions.refresh()
+        if !permissions.inputMonitoringGranted {
+            state.setError(AppError(
+                "Input Monitoring not granted",
+                hint: "enable it in System Settings to use the fn/Globe shortcut"))
+        }
         let mode = FnMode(rawValue: UserDefaults.standard.string(forKey: PrefKey.fnMode) ?? "") ?? .holdPTT
         switch mode {
         case .holdPTT:
@@ -75,16 +83,26 @@ final class Coordinator: ObservableObject {
     }
 
     func loadModel(_ model: String) async {
-        state.setStatus(.loadingModel(WhisperModel.label(for: model)))
+        let label = WhisperModel.label(for: model)
+        state.setStatus(.loadingModel(label))
+        state.clearError()
         // Download with visible progress (in the Model tab) if not already present.
         if !models.isDownloaded(model) {
-            _ = await models.download(model)
+            let ok = await models.download(model)
+            if !ok && !models.isDownloaded(model) {
+                state.setError(AppError(
+                    "Couldn't download the \(label) model",
+                    hint: "check your internet connection and try again"))
+                return
+            }
         }
         do {
             try await transcription.loadModel(model) { _ in }
             if !state.isRecording { state.setStatus(.idle) }
         } catch {
-            state.setStatus(.error("Model load failed"))
+            state.setError(AppError(
+                "Couldn't load the \(label) transcription model",
+                hint: "try re-downloading it in Settings → Model"))
         }
     }
 
@@ -97,14 +115,26 @@ final class Coordinator: ObservableObject {
 
     func beginRecording(silent: Bool = false) {
         guard !state.isRecording else { return }
-        guard permissions.microphoneAuthorized || AVCaptureDevice.authorizationStatus(for: .audio) != .denied else {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .denied, .restricted:
+            // Permission was explicitly refused — the system prompt won't reappear,
+            // so point the user at System Settings.
+            state.setError(AppError(
+                "Microphone access denied",
+                hint: "enable it in System Settings → Privacy & Security → Microphone"))
+            permissions.openMicrophoneSettings()
+            return
+        case .notDetermined:
             permissions.requestMicrophone()
             return
+        default:
+            break
         }
         do {
             try recorder.start()
             state.clearLive()
             state.lastWarning = nil
+            state.clearError()
             state.setStatus(.recording)
             if !silent { SoundService.play(.start) }
             startEscMonitor()
@@ -113,7 +143,7 @@ final class Coordinator: ObservableObject {
                 startRealtimePolling()
             }
         } catch {
-            state.setStatus(.error(error.localizedDescription))
+            state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
         }
     }
 
@@ -205,21 +235,31 @@ final class Coordinator: ObservableObject {
             var finalText = raw
             if UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled), let cfg = rewriteConfig() {
                 state.setStatus(.rewriting)
-                let cleaned = await RewriteService.rewrite(raw, vocabulary: vocabulary.terms, config: cfg)
-                if cleaned == raw {
-                    // Either unchanged or a silent fallback; only warn if key looked usable.
-                    state.lastWarning = nil
+                let outcome = await RewriteService.rewriteResult(raw, vocabulary: vocabulary.terms, config: cfg)
+                if let failure = outcome.failure {
+                    // Rewrite failed: deliver the raw transcript but tell the user why.
+                    state.setError(AppError(failure, hint: "delivered the raw transcript instead"))
                 }
-                finalText = cleaned
+                finalText = outcome.text
             }
 
             state.lastTranscript = finalText
             deliver(finalText)
             SoundService.play(.done)
-            state.setStatus(.idle)
+            if case .error = state.status {} else { state.setStatus(.idle) }
+        } catch let error as TranscriptionService.TranscriptionError {
+            switch error {
+            case .empty:
+                // Benign: nothing was said. Keep this a soft warning, not an error.
+                state.setStatus(.idle)
+                state.lastWarning = "No speech detected."
+            case .modelNotLoaded:
+                state.setError(AppError(
+                    "Transcription model isn't ready",
+                    hint: "wait for it to finish loading, or pick one in Settings → Model"))
+            }
         } catch {
-            state.setStatus(.idle)
-            state.lastWarning = "No speech detected."
+            state.setError(AppError("Transcription failed", hint: error.localizedDescription))
         }
         hud.hide()
         state.clearLive()
@@ -232,6 +272,17 @@ final class Coordinator: ObservableObject {
         case .copyOnly:
             ClipboardService.set(text)
         case .copyPaste:
+            permissions.refresh()
+            guard permissions.accessibilityTrusted else {
+                // Paste needs Accessibility; the text is already on the clipboard,
+                // so degrade gracefully and tell the user how to enable auto-paste.
+                ClipboardService.set(text)
+                state.setError(AppError(
+                    "Couldn't auto-paste (copied to clipboard instead)",
+                    hint: "grant Accessibility in System Settings → Privacy & Security"))
+                permissions.openAccessibilitySettings()
+                return
+            }
             let restore = UserDefaults.standard.bool(forKey: PrefKey.restoreClipboard)
             TextInserter.insert(text, restoreClipboard: restore)
         }

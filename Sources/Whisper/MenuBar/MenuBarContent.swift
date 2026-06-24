@@ -13,6 +13,11 @@ struct MenuBarContent: View {
     var body: some View {
         Text(state.status.menuLabel)
 
+        if let error = state.lastError {
+            Text("⛔︎ \(error.displayText)")
+            Button("Dismiss") { state.clearError() }
+        }
+
         if let warning = state.lastWarning {
             Text("⚠︎ \(warning)")
         }
