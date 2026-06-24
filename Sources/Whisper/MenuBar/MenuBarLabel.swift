@@ -1,46 +1,65 @@
 import SwiftUI
+import AppKit
 
-/// The menu bar icon: the Looped brand mark (a vector template image from the
-/// asset catalog, so it stays crisp and adapts to light/dark). The pill behind
-/// it tints by state — orange while recording, amber while busy — so a single
-/// asset covers every state.
+/// The menu bar icon: the Looped brand mark.
+///
+/// - Idle: a vector **template** image (adapts to light/dark automatically).
+/// - Active states: a pre-rendered **non-template** `NSImage` (a colored pill
+///   with a white glyph) — MenuBarExtra renders plain SwiftUI labels as a
+///   monochrome template and strips color, so colored states must be supplied
+///   as a non-template bitmap instead.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        Image("MenuBarIcon")
-            .renderingMode(.template)
-            .resizable()
-            .scaledToFit()
-            .frame(width: 16, height: 16)
-            .frame(width: 22, height: 18)
-            .background {
-                if let color = backgroundColor {
-                    RoundedRectangle(cornerRadius: 5, style: .continuous)
-                        .fill(color)
-                        .opacity(backgroundOpacity)
-                }
-            }
-            .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
+        if let badge = activeBadge {
+            Image(nsImage: badge)
+                .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
+        } else {
+            Image("MenuBarIcon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .frame(width: 16, height: 16)
+                .frame(width: 22, height: 18)
+                .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
+        }
     }
 
     /// macOS's system recording-indicator orange.
     private static let recordingOrange = Color(.sRGB, red: 1.0, green: 0x92 / 255.0, blue: 0x30 / 255.0)
 
-    private var backgroundColor: Color? {
+    private var activeBadge: NSImage? {
         switch state.status {
-        case .recording:                                return Self.recordingOrange
-        case .transcribing, .rewriting, .loadingModel:  return .yellow
-        case .error:                                    return .red
-        case .idle:                                     return nil   // no background
+        case .recording:                                return Self.badge("rec", Self.recordingOrange)
+        case .transcribing, .rewriting, .loadingModel:  return Self.badge("busy", .yellow)
+        case .error:                                    return Self.badge("err", .red)
+        case .idle:                                     return nil
         }
     }
 
-    /// Gently pulse the background while busy (timer-driven `spinnerAngle`
-    /// re-renders the label; menu bar SwiftUI animations don't tick on their own).
-    private var backgroundOpacity: Double {
-        guard state.isBusy else { return 1 }
-        let radians = state.spinnerAngle * .pi / 180
-        return 0.45 + 0.55 * abs(sin(radians))
+    // MARK: - rendering
+
+    private static var cache: [String: NSImage] = [:]
+
+    private static func badge(_ key: String, _ color: Color) -> NSImage {
+        if let cached = cache[key] { return cached }
+        let view = ZStack {
+            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(color)
+            Image("MenuBarIcon")
+                .renderingMode(.template)
+                .resizable()
+                .scaledToFit()
+                .foregroundStyle(.white)
+                .frame(width: 16, height: 16)
+        }
+        .frame(width: 22, height: 18)
+
+        let renderer = ImageRenderer(content: view)
+        renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+        let image = renderer.nsImage ?? NSImage()
+        image.isTemplate = false   // keep the color
+        cache[key] = image
+        return image
     }
 }
