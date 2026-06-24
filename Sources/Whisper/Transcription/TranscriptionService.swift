@@ -10,7 +10,13 @@ actor TranscriptionService {
 
     enum TranscriptionError: Error, LocalizedError {
         case empty
-        var errorDescription: String? { "No speech detected." }
+        case modelNotLoaded
+        var errorDescription: String? {
+            switch self {
+            case .empty: return "No speech detected."
+            case .modelNotLoaded: return "Transcription model isn't loaded yet."
+            }
+        }
     }
 
     /// Ensures the pipeline for `model` is loaded, downloading if needed.
@@ -27,7 +33,7 @@ actor TranscriptionService {
     /// Transcribes the given samples. `vocabulary` biases recognition toward the
     /// listed terms; `language` is an optional ISO hint ("" = auto-detect).
     func transcribe(samples: [Float], language: String, vocabulary: [String]) async throws -> String {
-        guard let pipe else { throw TranscriptionError.empty }
+        guard let pipe else { throw TranscriptionError.modelNotLoaded }
         guard !samples.isEmpty else { throw TranscriptionError.empty }
 
         var options = DecodingOptions()
