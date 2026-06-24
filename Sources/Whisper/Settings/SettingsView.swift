@@ -245,7 +245,7 @@ private struct ModelRow: View {
         case .downloaded:
             HStack(spacing: 6) {
                 Label("Downloaded", systemImage: "checkmark.circle.fill")
-                    .labelStyle(.iconOnly).foregroundStyle(.green)
+                    .labelStyle(.iconOnly).foregroundStyle(BrandColor.success)
                 Button { manager.revealInFinder(model.id) } label: { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Reveal in Finder")
                 Button { confirmingDelete = true } label: { Image(systemName: "trash") }
@@ -541,7 +541,7 @@ private struct PermissionsTab: View {
                      open: @escaping () -> Void, note: String) -> some View {
         HStack(alignment: .top) {
             Image(systemName: granted ? "checkmark.circle.fill" : "xmark.circle")
-                .foregroundStyle(granted ? .green : .red)
+                .foregroundStyle(granted ? BrandColor.success : BrandColor.error)
             VStack(alignment: .leading) {
                 Text(title).bold()
                 Text(note).font(.caption).foregroundStyle(.secondary)

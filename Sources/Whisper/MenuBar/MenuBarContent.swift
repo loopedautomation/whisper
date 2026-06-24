@@ -15,6 +15,9 @@ struct MenuBarContent: View {
     }
 
     var body: some View {
+        Text(appName)
+        Divider()
+
         Text(state.status.menuLabel)
 
         if let error = state.lastError {
@@ -76,6 +79,12 @@ struct MenuBarContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+
+    private var appName: String {
+        (Bundle.main.object(forInfoDictionaryKey: "CFBundleDisplayName") as? String)
+            ?? (Bundle.main.object(forInfoDictionaryKey: "CFBundleName") as? String)
+            ?? "Looped Whisper"
     }
 
     private var selectedModel: String {

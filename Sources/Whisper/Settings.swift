@@ -77,7 +77,7 @@ enum DefaultPref {
             PrefKey.selectedModel: "base",
             PrefKey.transcriptionMode: TranscriptionMode.batch.rawValue,
             PrefKey.outputBehavior: OutputBehavior.copyPaste.rawValue,
-            PrefKey.restoreClipboard: true,
+            PrefKey.restoreClipboard: false,
             PrefKey.realtimeInsertion: RealtimeInsertion.onStop.rawValue,
             PrefKey.fnEnabled: false,
             PrefKey.fnMode: FnMode.holdPTT.rawValue,
