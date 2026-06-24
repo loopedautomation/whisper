@@ -20,6 +20,14 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$EXEC_NAME"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 
+# Version is single-sourced from package.json (managed by changesets); stamp it
+# into the bundle so the app reports the same version as the changelog.
+if [[ -f "$ROOT/package.json" ]]; then
+    VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/package.json'))['version'])")"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
+    echo "▶ Version $VERSION (from package.json)"
+fi
+
 # App icon: regenerate .icns from the source PNG if present, then bundle it.
 if [[ -f "$ROOT/Resources/AppIcon.png" ]]; then
     "$ROOT/scripts/make-icon.sh" >/dev/null || true

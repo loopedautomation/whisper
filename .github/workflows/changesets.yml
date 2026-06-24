@@ -1,0 +1,37 @@
+name: Changesets
+
+# On every push to main, opens/updates a "Version Packages" PR that consumes the
+# pending changesets — bumping package.json and regenerating CHANGELOG.md.
+# Merging that PR is what cuts a new version; you then tag the matching release.
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: changesets-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - run: npm ci
+
+      - name: Create or update Version Packages PR
+        uses: changesets/action@v1
+        with:
+          version: npm run version
+          title: "Version Packages"
+          commit: "Version packages"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

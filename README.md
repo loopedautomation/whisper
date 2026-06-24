@@ -90,12 +90,6 @@ npx changeset version    # updates CHANGELOG.md + package.json version
 
 Then tag the matching `vX.Y.Z` release to trigger the signed/notarized build.
 
-## Distribution
-
-For sharing, sign with a Developer ID and notarize (the app posts CGEvents, so
-it can't be sandboxed for the Mac App Store). The build script ad-hoc signs for
-local use.
-
 ## License
 
 MIT — see [LICENSE](LICENSE).
