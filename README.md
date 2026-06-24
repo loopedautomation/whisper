@@ -24,13 +24,13 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 
 ## Install
 
-Once a release is published, install with Homebrew (Apple Silicon, macOS 14+):
+Apple Silicon, macOS 14+. Install with Homebrew:
 
 ```bash
 brew install --cask loopedautomation/tap/looped-whisper
 ```
 
-Or download the notarized `.zip` from the [Releases](https://github.com/loopedautomation/whisper/releases) page.
+Or download the notarized **`.dmg`** from the [Releases](https://github.com/loopedautomation/whisper/releases) page and drag the app into Applications.
 
 ## Build & run
 
