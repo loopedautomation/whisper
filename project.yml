@@ -24,6 +24,10 @@ targets:
         buildPhase: resources
       - path: Resources/Assets.xcassets
         buildPhase: resources
+      # Localized bundle name so Finder/Applications shows "Looped Whisper"
+      # even though the on-disk bundle is LoopedWhisper.app (PRODUCT_NAME).
+      - path: Resources/en.lproj/InfoPlist.strings
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: LoopedWhisper
