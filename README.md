@@ -73,6 +73,23 @@ the raw transcript is used instead.
 swift test
 ```
 
+## Changesets
+
+Changelog and versioning are managed with [changesets](https://github.com/changesets/changesets).
+When you make a notable change, record it:
+
+```bash
+npx changeset            # write a changeset (pick the bump level + summary)
+```
+
+At release time, roll the pending changesets into `CHANGELOG.md` and bump the version:
+
+```bash
+npx changeset version    # updates CHANGELOG.md + package.json version
+```
+
+Then tag the matching `vX.Y.Z` release to trigger the signed/notarized build.
+
 ## Distribution
 
 For sharing, sign with a Developer ID and notarize (the app posts CGEvents, so
