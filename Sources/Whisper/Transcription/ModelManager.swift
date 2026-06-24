@@ -29,12 +29,9 @@ struct WhisperModel: Identifiable, Hashable {
 enum ModelStorage {
     static let repo = "argmaxinc/whisperkit-coreml"
 
-    /// Root we hand to WhisperKit as `downloadBase` so the location is deterministic.
-    static let baseURL: URL = {
-        let dir = AppPaths.support.appendingPathComponent("Models", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir
-    }()
+    /// Root we hand to WhisperKit as `downloadBase`. Shared between release and
+    /// dev builds so models aren't downloaded twice.
+    static let baseURL: URL = AppPaths.sharedModels
 
     static func folder(for modelID: String) -> URL {
         baseURL

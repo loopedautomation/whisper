@@ -14,8 +14,20 @@ esac
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EXEC_NAME="LoopedWhisper"
-APP="$ROOT/build/LoopedWhisper.app"
 DERIVED="$ROOT/build/DerivedData"
+
+# Flavor: set WHISPER_DEV=1 for an isolated development build (separate bundle
+# id / name / data), so it never disturbs your installed release app.
+if [[ "${WHISPER_DEV:-0}" == "1" ]]; then
+    BUNDLE_ID="com.looped.whisper.dev"
+    DISPLAY_NAME="Looped Whisper (Dev)"
+    APP="$ROOT/build/LoopedWhisperDev.app"
+    echo "▶ DEV flavor: $BUNDLE_ID"
+else
+    BUNDLE_ID="com.looped.whisper"
+    DISPLAY_NAME="Looped Whisper"
+    APP="$ROOT/build/LoopedWhisper.app"
+fi
 
 # 1. App icon (generate .icns from the source PNG so xcodebuild can embed it).
 if [[ -f "$ROOT/Resources/AppIcon.png" ]]; then
@@ -34,6 +46,8 @@ xcodebuild \
     -scheme LoopedWhisper \
     -configuration "$CONFIGURATION" \
     -derivedDataPath "$DERIVED" \
+    PRODUCT_BUNDLE_IDENTIFIER="$BUNDLE_ID" \
+    ENABLE_DEBUG_DYLIB=NO \
     CODE_SIGNING_ALLOWED=NO \
     build | (xcbeautify 2>/dev/null || cat) | tail -5
 
@@ -50,6 +64,16 @@ if [[ -f "$ROOT/package.json" ]]; then
     VERSION="$(python3 -c "import json;print(json.load(open('$ROOT/package.json'))['version'])")"
     /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$APP/Contents/Info.plist"
     echo "▶ Version $VERSION (from package.json)"
+fi
+
+# 4b. Dev flavor: distinguish the name everywhere (Info.plist + localized strings).
+if [[ "${WHISPER_DEV:-0}" == "1" ]]; then
+    /usr/libexec/PlistBuddy -c "Set :CFBundleName $DISPLAY_NAME" "$APP/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName $DISPLAY_NAME" "$APP/Contents/Info.plist"
+    STRINGS="$APP/Contents/Resources/en.lproj/InfoPlist.strings"
+    if [[ -f "$STRINGS" ]]; then
+        printf '"CFBundleDisplayName" = "%s";\n"CFBundleName" = "%s";\n' "$DISPLAY_NAME" "$DISPLAY_NAME" > "$STRINGS"
+    fi
 fi
 
 # 5. Codesign. Hardened runtime + audio-input entitlement (required for the mic
@@ -70,10 +94,16 @@ else
     echo "▶ Codesigning (ad-hoc — run scripts/dev-cert.sh for persistent permissions)"
 fi
 
-# Sign nested resource bundles first, then the app (inside-out).
+# Sign nested code inside-out: resource bundles, dylibs (e.g. the debug-dylib in
+# Debug builds), and frameworks must be signed with the SAME identity as the app,
+# or dyld rejects them ("different Team IDs").
 shopt -s nullglob
-for nested in "$APP/Contents/Resources/"*.bundle; do
-    codesign --force --sign "$IDENTITY" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} "$nested"
+for nested in \
+    "$APP/Contents/Resources/"*.bundle \
+    "$APP/Contents/MacOS/"*.dylib \
+    "$APP/Contents/Frameworks/"*.dylib \
+    "$APP/Contents/Frameworks/"*.framework; do
+    codesign --force --options runtime --sign "$IDENTITY" ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} "$nested"
 done
 shopt -u nullglob
 codesign --force --sign "$IDENTITY" \

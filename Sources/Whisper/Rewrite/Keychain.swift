@@ -3,7 +3,8 @@ import Security
 
 /// Minimal Keychain wrapper for storing the rewrite API key securely.
 enum Keychain {
-    private static let service = "com.looped.whisper.apikey"
+    // Keyed by bundle id so dev builds keep a separate API key from the release app.
+    private static let service = (Bundle.main.bundleIdentifier ?? "com.looped.whisper") + ".apikey"
 
     static func set(_ value: String, account: String) {
         let data = Data(value.utf8)

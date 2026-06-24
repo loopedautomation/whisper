@@ -9,7 +9,7 @@
     <key>CFBundleDisplayName</key>
     <string>Looped Whisper</string>
     <key>CFBundleIdentifier</key>
-    <string>com.looped.whisper</string>
+    <string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
     <key>CFBundleExecutable</key>
     <string>LoopedWhisper</string>
     <key>CFBundleIconFile</key>

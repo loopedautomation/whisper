@@ -3,9 +3,10 @@
 
 APP      := build/LoopedWhisper.app
 BIN      := $(APP)/Contents/MacOS/LoopedWhisper
+DEV_APP  := build/LoopedWhisperDev.app
 
 .DEFAULT_GOAL := help
-.PHONY: help build build-debug bundle run run-debug dev test clean resolve fmt icon dev-cert reset-perms tap-sha
+.PHONY: help build build-debug bundle run run-debug dev build-dev run-dev test clean resolve fmt icon dev-cert reset-perms reset-perms-dev tap-sha
 
 help: ## List available targets
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) \
@@ -25,11 +26,17 @@ run: build ## Build (release) and launch the app
 run-debug: build-debug ## Build (debug) and run in the foreground with logs
 	@"$(BIN)"
 
-dev: ## Watch sources: rebuild + relaunch on change (needs `brew install watchexec`)
+build-dev: ## Build an ISOLATED dev .app (separate id/name/data; shares models)
+	@WHISPER_DEV=1 ./scripts/build-app.sh debug
+
+run-dev: build-dev ## Build + launch the isolated dev app
+	@open "$(DEV_APP)"
+
+dev: ## Watch sources: rebuild + relaunch the isolated dev app (needs watchexec)
 	@command -v watchexec >/dev/null 2>&1 || { \
 		echo "watchexec not found. Install with: brew install watchexec"; exit 1; }
 	@watchexec -e swift -r --project-origin . -- \
-		'./scripts/build-app.sh debug && open "$(APP)"'
+		'WHISPER_DEV=1 ./scripts/build-app.sh debug && open "$(DEV_APP)"'
 
 icon: ## Generate AppIcon.icns from Resources/AppIcon.png
 	@./scripts/make-icon.sh
@@ -41,11 +48,17 @@ tap-sha: ## Print the sha256 of a release zip for a Homebrew cask (ZIP=path)
 	@test -n "$(ZIP)" || { echo "Usage: make tap-sha ZIP=LoopedWhisper-0.1.0.zip"; exit 1; }
 	@shasum -a 256 "$(ZIP)" | awk '{print $$1}'
 
-reset-perms: ## Clear stale TCC grants for the app (then relaunch & re-grant)
+reset-perms: ## Clear stale TCC grants for the release app (then relaunch & re-grant)
 	@tccutil reset Accessibility com.looped.whisper || true
 	@tccutil reset ListenEvent com.looped.whisper || true
 	@tccutil reset Microphone com.looped.whisper || true
 	@echo "Cleared TCC entries for com.looped.whisper. Rebuild + relaunch, then re-grant."
+
+reset-perms-dev: ## Clear stale TCC grants for the dev app
+	@tccutil reset Accessibility com.looped.whisper.dev || true
+	@tccutil reset ListenEvent com.looped.whisper.dev || true
+	@tccutil reset Microphone com.looped.whisper.dev || true
+	@echo "Cleared TCC entries for com.looped.whisper.dev."
 
 test: ## Run unit tests
 	@swift test
