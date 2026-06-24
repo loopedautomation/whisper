@@ -1,0 +1,8 @@
+/* Localized bundle name shown by Finder / Applications.
+   The bundle directory on disk is "LoopedWhisper.app" (PRODUCT_NAME), so the
+   CFBundleDisplayName in Info.plist alone is ignored by Finder — it only honors
+   it when it matches the on-disk name. Providing a localized InfoPlist.strings
+   lets Finder display "Looped Whisper" while keeping the product/binary name
+   LoopedWhisper for code signing and paths. */
+"CFBundleDisplayName" = "Looped Whisper";
+"CFBundleName" = "Looped Whisper";
