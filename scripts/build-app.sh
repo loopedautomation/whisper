@@ -20,6 +20,17 @@ mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 cp "$BIN" "$APP/Contents/MacOS/$EXEC_NAME"
 cp "$ROOT/Resources/Info.plist" "$APP/Contents/Info.plist"
 
+# Copy SwiftPM-generated resource bundles (e.g. KeyboardShortcuts, swift-crypto,
+# swift-transformers) into Resources/ so `Bundle.module` resolves at runtime.
+# Without these the app traps (EXC_BREAKPOINT) the moment such code runs.
+BIN_DIR="$(dirname "$BIN")"
+shopt -s nullglob
+for bundle in "$BIN_DIR"/*.bundle; do
+    cp -R "$bundle" "$APP/Contents/Resources/"
+    echo "▶ Bundled resources: $(basename "$bundle")"
+done
+shopt -u nullglob
+
 # Version is single-sourced from package.json (managed by changesets); stamp it
 # into the bundle so the app reports the same version as the changelog.
 if [[ -f "$ROOT/package.json" ]]; then
