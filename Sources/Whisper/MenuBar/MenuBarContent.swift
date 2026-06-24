@@ -4,12 +4,14 @@ struct MenuBarContent: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var state: AppState
     @ObservedObject private var audioDevices: AudioDeviceManager
+    @ObservedObject private var models: ModelManager
     @Environment(\.openSettings) private var openSettings
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
         self.state = coordinator.state
         self.audioDevices = coordinator.audioDevices
+        self.models = coordinator.models
     }
 
     var body: some View {
@@ -48,7 +50,14 @@ struct MenuBarContent: View {
 
         Divider()
 
-        Text("Model: \(WhisperModel.label(for: selectedModel))")
+        let installed = WhisperModel.known.filter { models.isDownloaded($0.id) }
+        if installed.isEmpty {
+            Text("No models installed — download in Settings")
+        } else {
+            Picker("Model", selection: modelBinding) {
+                ForEach(installed) { Text($0.label).tag($0.id) }
+            }
+        }
 
         Button("Settings…") {
             NSApp.activate(ignoringOtherApps: true)
@@ -71,5 +80,18 @@ struct MenuBarContent: View {
 
     private var selectedModel: String {
         UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base"
+    }
+
+    /// Switches the active model and loads it (only installed models are listed,
+    /// so this never triggers a download).
+    private var modelBinding: Binding<String> {
+        Binding(
+            get: { selectedModel },
+            set: { newID in
+                guard newID != selectedModel else { return }
+                UserDefaults.standard.set(newID, forKey: PrefKey.selectedModel)
+                Task { await coordinator.loadModel(newID) }
+            }
+        )
     }
 }
