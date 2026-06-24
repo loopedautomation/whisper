@@ -42,11 +42,22 @@ enum SoundService {
         guard defaults.bool(forKey: PrefKey.soundsEnabled),
               defaults.bool(forKey: event.enabledKey) else { return }
         let name = defaults.string(forKey: event.nameKey) ?? event.defaultSound
-        preview(name)
+        play(name: name, volume: currentVolume)
     }
 
-    /// Plays a named system sound immediately (used by the settings preview button).
-    static func preview(_ name: String) {
-        NSSound(named: NSSound.Name(name))?.play()
+    /// Plays a named system sound immediately at a given volume (used by the
+    /// settings preview button so the slider's effect is audible while dragging).
+    static func preview(_ name: String, volume: Float? = nil) {
+        play(name: name, volume: volume ?? currentVolume)
+    }
+
+    private static var currentVolume: Float {
+        Float(UserDefaults.standard.double(forKey: PrefKey.soundVolume))
+    }
+
+    private static func play(name: String, volume: Float) {
+        guard let sound = NSSound(named: NSSound.Name(name)) else { return }
+        sound.volume = max(0, min(1, volume))
+        sound.play()
     }
 }

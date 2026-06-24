@@ -312,10 +312,12 @@ private struct HotkeysTab: View {
 
 private struct SoundsTab: View {
     @State private var enabled = d.bool(forKey: PrefKey.soundsEnabled)
+    @State private var volume = d.double(forKey: PrefKey.soundVolume)
     @State private var perEvent: [String: (on: Bool, name: String)] = [:]
 
     private func load() {
         enabled = d.bool(forKey: PrefKey.soundsEnabled)
+        volume = d.double(forKey: PrefKey.soundVolume)
         var map: [String: (Bool, String)] = [:]
         for e in SoundEvent.allCases {
             map[e.rawValue] = (d.bool(forKey: e.enabledKey), d.string(forKey: e.nameKey) ?? e.defaultSound)
@@ -325,6 +327,7 @@ private struct SoundsTab: View {
 
     private var isDirty: Bool {
         if enabled != d.bool(forKey: PrefKey.soundsEnabled) { return true }
+        if volume != d.double(forKey: PrefKey.soundVolume) { return true }
         for e in SoundEvent.allCases {
             guard let v = perEvent[e.rawValue] else { continue }
             if v.on != d.bool(forKey: e.enabledKey) { return true }
@@ -336,6 +339,15 @@ private struct SoundsTab: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             Toggle("Play sound effects", isOn: $enabled)
+
+            HStack(spacing: 8) {
+                Image(systemName: "speaker.fill").foregroundStyle(.secondary)
+                Slider(value: $volume, in: 0...1) { editing in
+                    if !editing { SoundService.preview("Pop", volume: Float(volume)) }
+                }
+                Image(systemName: "speaker.wave.3.fill").foregroundStyle(.secondary)
+            }
+            .disabled(!enabled)
 
             VStack(alignment: .leading, spacing: 10) {
                 Text("EVENTS")
@@ -350,7 +362,7 @@ private struct SoundsTab: View {
                             ForEach(SoundService.available, id: \.self) { Text($0).tag($0) }
                         }
                         .labelsHidden().frame(width: 130)
-                        Button { SoundService.preview(perEvent[event.rawValue]?.name ?? event.defaultSound) } label: {
+                        Button { SoundService.preview(perEvent[event.rawValue]?.name ?? event.defaultSound, volume: Float(volume)) } label: {
                             Image(systemName: "play.circle")
                         }
                         .buttonStyle(.borderless).help("Preview")
@@ -362,6 +374,7 @@ private struct SoundsTab: View {
             Spacer()
             SaveBar(disabled: !isDirty) {
                 d.set(enabled, forKey: PrefKey.soundsEnabled)
+                d.set(volume, forKey: PrefKey.soundVolume)
                 for e in SoundEvent.allCases {
                     if let v = perEvent[e.rawValue] {
                         d.set(v.on, forKey: e.enabledKey)

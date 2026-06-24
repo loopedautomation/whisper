@@ -18,6 +18,7 @@ enum PrefKey {
     static let language = "language"                       // whisper language hint, "" = auto
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
+    static let soundVolume = "soundVolume"                // 0.0...1.0
 }
 
 enum TranscriptionMode: String, CaseIterable, Identifiable {
@@ -72,6 +73,7 @@ enum DefaultPref {
         UserDefaults.standard.register(defaults: defaults)
         UserDefaults.standard.register(defaults: [
             PrefKey.soundsEnabled: true,
+            PrefKey.soundVolume: 1.0,
             PrefKey.selectedModel: "base",
             PrefKey.transcriptionMode: TranscriptionMode.batch.rawValue,
             PrefKey.outputBehavior: OutputBehavior.copyPaste.rawValue,
