@@ -3,62 +3,57 @@ import AppKit
 
 /// The menu bar icon: the Looped brand mark.
 ///
-/// - Idle: a vector **template** image (adapts to light/dark automatically).
-/// - Active states: a pre-rendered **non-template** `NSImage` (a colored pill
-///   with a white glyph) — MenuBarExtra renders plain SwiftUI labels as a
-///   monochrome template and strips color, so colored states must be supplied
-///   as a non-template bitmap instead.
+/// Every state is rendered through the same pipeline at one fixed size (so the
+/// icon never changes size between states). Idle is a **template** image (adapts
+/// to light/dark); active states are **non-template** colored bitmaps, because
+/// MenuBarExtra flattens plain SwiftUI labels to a monochrome template and would
+/// otherwise strip the color.
 struct MenuBarLabel: View {
     @ObservedObject var state: AppState
 
     var body: some View {
-        if let badge = activeBadge {
-            Image(nsImage: badge)
-                .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
-        } else {
-            Image("MenuBarIcon")
-                .renderingMode(.template)
-                .resizable()
-                .scaledToFit()
-                .frame(width: 16, height: 16)
-                .frame(width: 22, height: 18)
-                .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
-        }
+        Image(nsImage: Self.icon(for: state.status))
+            .accessibilityLabel("Looped Whisper — \(state.status.menuLabel)")
     }
 
-    /// macOS's system recording-indicator orange.
-    private static let recordingOrange = Color(.sRGB, red: 1.0, green: 0x92 / 255.0, blue: 0x30 / 255.0)
-
-    private var activeBadge: NSImage? {
-        switch state.status {
-        case .recording:                                return Self.badge("rec", Self.recordingOrange)
-        case .transcribing, .rewriting, .loadingModel:  return Self.badge("busy", .yellow)
-        case .error:                                    return Self.badge("err", .red)
-        case .idle:                                     return nil
+    private static func icon(for status: AppStatus) -> NSImage {
+        switch status {
+        case .idle:
+            return badge(key: "idle", background: nil, glyph: .black, template: true)
+        case .recording:
+            return badge(key: "rec", background: BrandColor.recording, glyph: .white, template: false)
+        case .transcribing, .rewriting, .loadingModel:
+            return badge(key: "busy", background: BrandColor.transcribing, glyph: .white, template: false)
+        case .error:
+            return badge(key: "err", background: BrandColor.error, glyph: .white, template: false)
         }
     }
 
     // MARK: - rendering
 
+    private static let canvas = CGSize(width: 26, height: 18)
+    private static let glyphSize: CGFloat = 16
     private static var cache: [String: NSImage] = [:]
 
-    private static func badge(_ key: String, _ color: Color) -> NSImage {
+    private static func badge(key: String, background: Color?, glyph: Color, template: Bool) -> NSImage {
         if let cached = cache[key] { return cached }
         let view = ZStack {
-            RoundedRectangle(cornerRadius: 5, style: .continuous).fill(color)
+            if let background {
+                Capsule(style: .continuous).fill(background)   // pill, like the macOS mic indicator
+            }
             Image("MenuBarIcon")
                 .renderingMode(.template)
                 .resizable()
                 .scaledToFit()
-                .foregroundStyle(.white)
-                .frame(width: 16, height: 16)
+                .foregroundStyle(glyph)
+                .frame(width: glyphSize, height: glyphSize)
         }
-        .frame(width: 22, height: 18)
+        .frame(width: canvas.width, height: canvas.height)
 
         let renderer = ImageRenderer(content: view)
         renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
         let image = renderer.nsImage ?? NSImage()
-        image.isTemplate = false   // keep the color
+        image.isTemplate = template
         cache[key] = image
         return image
     }
