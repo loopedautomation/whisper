@@ -22,7 +22,7 @@ struct SettingsView: View {
                 .tabItem { Label("Rewrite", systemImage: "wand.and.stars") }
             PermissionsTab(permissions: coordinator.permissions)
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
-            AboutTab()
+            AboutTab(coordinator: coordinator)
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
         .padding(20)
@@ -556,10 +556,42 @@ private struct PermissionsTab: View {
 // MARK: - About
 
 private struct AboutTab: View {
+    @ObservedObject var coordinator: Coordinator
+    @ObservedObject private var updates: UpdateChecker
+
+    init(coordinator: Coordinator) {
+        self.coordinator = coordinator
+        self.updates = coordinator.updateChecker
+    }
+
     private var version: String {
         let v = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0"
         let b = Bundle.main.infoDictionary?["CFBundleVersion"] as? String ?? "1"
         return "Version \(v) (\(b))"
+    }
+
+    @ViewBuilder
+    private var updateStatus: some View {
+        switch updates.state {
+        case .checking:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Checking for updates…").font(.caption).foregroundStyle(.secondary)
+            }
+        case .updateAvailable(let v, _):
+            Button {
+                updates.openDownloadPage()
+            } label: {
+                Label("Update available: \(v) — Download", systemImage: "arrow.down.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+        case .upToDate:
+            Text("You're up to date.").font(.caption).foregroundStyle(.secondary)
+        case .failed:
+            Text("Couldn't check for updates.").font(.caption).foregroundStyle(.secondary)
+        case .idle:
+            EmptyView()
+        }
     }
 
     var body: some View {
@@ -568,6 +600,11 @@ private struct AboutTab: View {
                 .resizable().frame(width: 96, height: 96)
             Text("Looped Whisper").font(.title2).bold()
             Text(version).font(.caption).foregroundStyle(.secondary)
+
+            updateStatus
+            Button("Check for Updates…") { coordinator.checkForUpdates() }
+                .controlSize(.small)
+
             Text("Free, open-source, local voice transcription for developers. Whisper models run on-device via WhisperKit — nothing is sent to the cloud for transcription.")
                 .font(.callout).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
