@@ -1,0 +1,43 @@
+name: LoopedWhisper
+options:
+  bundleIdPrefix: com.looped
+  deploymentTarget:
+    macOS: "14.0"
+  createIntermediateGroups: true
+
+packages:
+  WhisperKit:
+    url: https://github.com/argmaxinc/WhisperKit
+    from: "0.9.0"
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: "2.0.0"
+
+targets:
+  LoopedWhisper:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/Whisper
+      - path: Resources/AppIcon.icns
+        optional: true
+        buildPhase: resources
+    settings:
+      base:
+        PRODUCT_NAME: LoopedWhisper
+        PRODUCT_BUNDLE_IDENTIFIER: com.looped.whisper
+        INFOPLIST_FILE: Resources/Info.plist
+        GENERATE_INFOPLIST_FILE: NO
+        CODE_SIGN_ENTITLEMENTS: Resources/LoopedWhisper.entitlements
+        ENABLE_HARDENED_RUNTIME: YES
+        SWIFT_VERSION: "5.0"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        # We codesign separately (dev cert locally, Developer ID in CI).
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: ""
+    dependencies:
+      - package: WhisperKit
+        product: WhisperKit
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
