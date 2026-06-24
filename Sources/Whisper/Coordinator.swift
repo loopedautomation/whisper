@@ -1,0 +1,230 @@
+import Foundation
+import SwiftUI
+import AVFoundation
+
+/// Orchestrates the full capture pipeline:
+/// record → (realtime live caption) → transcribe → (rewrite) → clipboard/paste.
+@MainActor
+final class Coordinator: ObservableObject {
+    let state: AppState
+    let permissions: PermissionsManager
+    let loginItem: LoginItemManager
+    let vocabulary: VocabularyStore
+    let models: ModelManager
+
+    private let recorder = AudioRecorder()
+    private let transcription = TranscriptionService()
+    private var hotkeys: HotkeyManager?
+    private let fnMonitor = FnKeyMonitor()
+
+    private var realtimeTimer: Timer?
+    private var realtimeTask: Task<Void, Never>?
+    private let hud: HUDPanelController
+
+    init() {
+        let state = AppState()
+        self.state = state
+        permissions = PermissionsManager()
+        loginItem = LoginItemManager()
+        vocabulary = VocabularyStore()
+        models = ModelManager()
+        hud = HUDPanelController(state: state)
+        bootstrap()
+    }
+
+    func bootstrap() {
+        DefaultPref.registerDefaults()
+        permissions.refresh()
+        loginItem.refresh()
+        HotkeyManager.installDefaultShortcutsIfNeeded()
+        hotkeys = HotkeyManager(coordinator: self)
+        hotkeys?.register()
+        configureFnMonitor()
+        preloadModelInBackground()
+    }
+
+    // MARK: - fn key
+
+    func configureFnMonitor() {
+        fnMonitor.stop()
+        guard UserDefaults.standard.bool(forKey: PrefKey.fnEnabled) else { return }
+        let mode = FnMode(rawValue: UserDefaults.standard.string(forKey: PrefKey.fnMode) ?? "") ?? .holdPTT
+        switch mode {
+        case .holdPTT:
+            fnMonitor.onDown = { [weak self] in self?.beginRecording() }
+            fnMonitor.onUp = { [weak self] in self?.endRecording() }
+            fnMonitor.onDoubleTap = nil
+        case .doubleTapToggle:
+            fnMonitor.onDown = nil
+            fnMonitor.onUp = nil
+            fnMonitor.onDoubleTap = { [weak self] in self?.toggleRecording() }
+        }
+        fnMonitor.start()
+    }
+
+    // MARK: - model
+
+    private func preloadModelInBackground() {
+        let model = UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base"
+        Task {
+            await loadModel(model)
+        }
+    }
+
+    func loadModel(_ model: String) async {
+        state.setStatus(.loadingModel(WhisperModel.label(for: model)))
+        // Download with visible progress (in the Model tab) if not already present.
+        if !models.isDownloaded(model) {
+            _ = await models.download(model)
+        }
+        do {
+            try await transcription.loadModel(model) { _ in }
+            if !state.isRecording { state.setStatus(.idle) }
+        } catch {
+            state.setStatus(.error("Model load failed"))
+        }
+    }
+
+    // MARK: - recording control
+
+    func toggleRecording() {
+        SoundService.play(.toggle)
+        if state.isRecording { endRecording(silent: true) } else { beginRecording(silent: true) }
+    }
+
+    func beginRecording(silent: Bool = false) {
+        guard !state.isRecording else { return }
+        guard permissions.microphoneAuthorized || AVCaptureDevice.authorizationStatus(for: .audio) != .denied else {
+            permissions.requestMicrophone()
+            return
+        }
+        do {
+            try recorder.start()
+            state.clearLive()
+            state.lastWarning = nil
+            state.setStatus(.recording)
+            if !silent { SoundService.play(.start) }
+            if currentMode() == .realtime {
+                hud.show()
+                startRealtimePolling()
+            }
+        } catch {
+            state.setStatus(.error(error.localizedDescription))
+        }
+    }
+
+    func endRecording(silent: Bool = false) {
+        guard state.isRecording else { return }
+        stopRealtimePolling()
+        let samples = recorder.stop()
+        if !silent { SoundService.play(.stop) }
+        state.setStatus(.transcribing)
+        Task { await finishPipeline(samples: samples) }
+    }
+
+    // MARK: - realtime polling
+
+    private func startRealtimePolling() {
+        realtimeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
+            Task { @MainActor in self?.pollRealtime() }
+        }
+    }
+
+    private func stopRealtimePolling() {
+        realtimeTimer?.invalidate()
+        realtimeTimer = nil
+        realtimeTask?.cancel()
+        realtimeTask = nil
+    }
+
+    private func pollRealtime() {
+        guard realtimeTask == nil else { return }   // skip if previous pass still running
+        let snapshot = recorder.snapshot()
+        guard snapshot.count > Int(AudioRecorder.targetSampleRate) / 2 else { return }
+        realtimeTask = Task { [weak self] in
+            guard let self else { return }
+            let text = try? await self.transcription.transcribe(
+                samples: snapshot,
+                language: self.language(),
+                vocabulary: self.vocabulary.terms
+            )
+            if let text, !Task.isCancelled {
+                self.state.liveHypothesis = text
+            }
+            self.realtimeTask = nil
+        }
+    }
+
+    // MARK: - pipeline tail
+
+    private func finishPipeline(samples: [Float]) async {
+        do {
+            let raw = try await transcription.transcribe(
+                samples: samples,
+                language: language(),
+                vocabulary: vocabulary.terms
+            )
+            state.liveConfirmed = raw
+
+            var finalText = raw
+            if UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled), let cfg = rewriteConfig() {
+                state.setStatus(.rewriting)
+                let cleaned = await RewriteService.rewrite(raw, vocabulary: vocabulary.terms, config: cfg)
+                if cleaned == raw {
+                    // Either unchanged or a silent fallback; only warn if key looked usable.
+                    state.lastWarning = nil
+                }
+                finalText = cleaned
+            }
+
+            state.lastTranscript = finalText
+            deliver(finalText)
+            SoundService.play(.done)
+            state.setStatus(.idle)
+        } catch {
+            state.setStatus(.idle)
+            state.lastWarning = "No speech detected."
+        }
+        hud.hide()
+        state.clearLive()
+    }
+
+    private func deliver(_ text: String) {
+        guard !text.isEmpty else { return }
+        let behavior = OutputBehavior(rawValue: UserDefaults.standard.string(forKey: PrefKey.outputBehavior) ?? "") ?? .copyPaste
+        switch behavior {
+        case .copyOnly:
+            ClipboardService.set(text)
+        case .copyPaste:
+            let restore = UserDefaults.standard.bool(forKey: PrefKey.restoreClipboard)
+            TextInserter.insert(text, restoreClipboard: restore)
+        }
+    }
+
+    // MARK: - helpers
+
+    private func currentMode() -> TranscriptionMode {
+        TranscriptionMode(rawValue: UserDefaults.standard.string(forKey: PrefKey.transcriptionMode) ?? "") ?? .batch
+    }
+
+    private func language() -> String {
+        UserDefaults.standard.string(forKey: PrefKey.language) ?? ""
+    }
+
+    private func rewriteConfig() -> RewriteService.Config? {
+        let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
+        guard !key.isEmpty else { return nil }
+        let providerPref = RewriteProvider(rawValue: UserDefaults.standard.string(forKey: PrefKey.rewriteProvider) ?? "") ?? .anthropic
+        let model = UserDefaults.standard.string(forKey: PrefKey.rewriteModel) ?? "claude-haiku-4-5-20251001"
+        let template = UserDefaults.standard.string(forKey: PrefKey.rewritePrompt) ?? DefaultPref.rewritePromptTemplate
+        let provider: RewriteService.Provider
+        switch providerPref {
+        case .anthropic:
+            provider = .anthropic
+        case .openaiCompatible:
+            let base = UserDefaults.standard.string(forKey: PrefKey.rewriteBaseURL) ?? "https://api.openai.com/v1"
+            provider = .openaiCompatible(baseURL: base)
+        }
+        return RewriteService.Config(provider: provider, model: model, apiKey: key, promptTemplate: template)
+    }
+}
