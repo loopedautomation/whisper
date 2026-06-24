@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>Looped Whisper</string>
+    <key>CFBundleDisplayName</key>
+    <string>Looped Whisper</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.looped.whisper</string>
+    <key>CFBundleExecutable</key>
+    <string>LoopedWhisper</string>
+    <key>CFBundleIconFile</key>
+    <string>AppIcon</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>LSUIElement</key>
+    <true/>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>Looped Whisper records audio to transcribe your speech locally on your Mac.</string>
+    <key>NSInputMonitoringUsageDescription</key>
+    <string>Looped Whisper observes the fn / Globe key so you can use it as a dictation hotkey.</string>
+    <key>NSHighResolutionCapable</key>
+    <true/>
+</dict>
+</plist>
