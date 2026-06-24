@@ -56,13 +56,26 @@ jobs:
           set -euo pipefail
           echo "$API_KEY_BASE64" | base64 --decode > "$RUNNER_TEMP/api_key.p8"
 
-          # Zip preserving the bundle, submit, wait for the verdict.
+          # Zip preserving the bundle, submit, capture the submission id.
           ditto -c -k --keepParent "build/LoopedWhisper.app" "$RUNNER_TEMP/notarize.zip"
-          xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
+          SUBMIT_JSON="$(xcrun notarytool submit "$RUNNER_TEMP/notarize.zip" \
             --key "$RUNNER_TEMP/api_key.p8" \
             --key-id "$API_KEY_ID" \
             --issuer "$API_ISSUER_ID" \
-            --wait
+            --wait --output-format json)"
+          echo "$SUBMIT_JSON"
+          SUB_ID="$(echo "$SUBMIT_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["id"])')"
+          STATUS="$(echo "$SUBMIT_JSON" | python3 -c 'import json,sys;print(json.load(sys.stdin)["status"])')"
+
+          # Always print Apple's detailed log (shows exactly why if Invalid).
+          echo "::group::notarytool log"
+          xcrun notarytool log "$SUB_ID" \
+            --key "$RUNNER_TEMP/api_key.p8" --key-id "$API_KEY_ID" --issuer "$API_ISSUER_ID" || true
+          echo "::endgroup::"
+
+          if [ "$STATUS" != "Accepted" ]; then
+            echo "Notarization status: $STATUS"; exit 1
+          fi
 
           # Staple the ticket into the app so it runs offline without Gatekeeper prompts.
           xcrun stapler staple "build/LoopedWhisper.app"

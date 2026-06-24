@@ -46,15 +46,23 @@ fi
 # scripts/dev-cert.sh) so Accessibility / Input Monitoring grants persist across
 # rebuilds. Falls back to ad-hoc (`-`), where grants must be re-done each build.
 SIGN_ID="${WHISPER_SIGN_ID:-Looped Whisper Dev}"
+SIGN_FLAGS=()
 if security find-identity -p codesigning 2>/dev/null | grep -q "$SIGN_ID"; then
     IDENTITY="$SIGN_ID"
     echo "▶ Codesigning with stable identity: $IDENTITY"
+    # Notarization REQUIRES a secure (online) timestamp. Only add it for a real
+    # Developer ID cert — the self-signed dev identity can't be timestamped.
+    if [[ "$IDENTITY" == *"Developer ID"* ]]; then
+        SIGN_FLAGS+=(--timestamp)
+        echo "  (adding secure timestamp for notarization)"
+    fi
 else
     IDENTITY="-"
     echo "▶ Codesigning (ad-hoc — run scripts/dev-cert.sh for persistent permissions)"
 fi
 codesign --force --deep --sign "$IDENTITY" \
     --options runtime \
+    ${SIGN_FLAGS[@]+"${SIGN_FLAGS[@]}"} \
     --entitlements "$ROOT/Resources/LoopedWhisper.entitlements" \
     "$APP"
 
