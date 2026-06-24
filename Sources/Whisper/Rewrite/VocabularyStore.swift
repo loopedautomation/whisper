@@ -5,7 +5,7 @@ import Combine
 /// User-managed list of vocabulary terms (names, jargon, code identifiers),
 /// persisted as a plain JSON array at `~/Library/Application Support/Looped
 /// Whisper/vocabulary.json`. Used to bias Whisper recognition and to instruct
-/// the Phase-2 rewrite to preserve spellings. The file can be hand-edited; the
+/// the rewrite step to preserve spellings. The file can be hand-edited; the
 /// list reloads when the Vocabulary settings tab appears.
 @MainActor
 final class VocabularyStore: ObservableObject {

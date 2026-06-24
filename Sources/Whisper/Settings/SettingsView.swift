@@ -402,7 +402,7 @@ private struct VocabularyTab: View {
     private func add() { vocabulary.add(newTerm); newTerm = "" }
 }
 
-// MARK: - Rewrite (Phase 2)
+// MARK: - Rewrite
 
 private struct RewriteTab: View {
     @State private var enabled = d.bool(forKey: PrefKey.rewriteEnabled)

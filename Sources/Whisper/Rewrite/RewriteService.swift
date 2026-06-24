@@ -1,6 +1,6 @@
 import Foundation
 
-/// Phase 2: cleans up a raw transcript via an LLM (fix typos, punctuation,
+/// Cleans up a raw transcript via an LLM (fix typos, punctuation,
 /// capitalization) while preserving meaning and honoring the vocabulary list.
 /// Resilient by design: any failure falls back to the raw transcript.
 struct RewriteService {

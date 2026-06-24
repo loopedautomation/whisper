@@ -17,7 +17,7 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 - 🌐 **fn / Globe key support** — hold-to-talk or double-tap-to-toggle (see caveats).
 - 📋 **Auto clipboard + paste** at the cursor.
 - ⚡ **Realtime mode** — live caption as you speak.
-- ✨ **Phase 2: LLM cleanup** — optionally fix typos/punctuation via an Anthropic
+- ✨ **LLM cleanup** — optionally fix typos/punctuation via an Anthropic
   or OpenAI-compatible API key (stored in Keychain).
 - 📖 **Vocabulary** — bias recognition toward your names / jargon / identifiers.
 - 🔒 Launch at login, menu-bar agent (no Dock icon).
@@ -50,7 +50,7 @@ Dictation by default — set _System Settings → Keyboard → "Press 🌐 to" �
 Nothing_ to avoid conflicts. Some non-Apple keyboards don't emit an fn event;
 keep a standard shortcut as a fallback.
 
-## Phase 2 — LLM rewrite
+## LLM rewrite
 
 In **Settings → Rewrite**, enable cleanup, choose Anthropic (default, e.g.
 `claude-haiku-4-5-20251001`) or any OpenAI-compatible endpoint, and paste an
