@@ -22,6 +22,8 @@ targets:
       - path: Resources/AppIcon.icns
         optional: true
         buildPhase: resources
+      - path: Resources/Assets.xcassets
+        buildPhase: resources
     settings:
       base:
         PRODUCT_NAME: LoopedWhisper
