@@ -79,13 +79,16 @@ Changelog and versioning are managed with [changesets](https://github.com/change
 When you make a notable change, record it:
 
 ```bash
-npx changeset            # write a changeset (pick the bump level + summary)
+pnpm changeset            # write a changeset (pick the bump level + summary)
 ```
 
-At release time, roll the pending changesets into `CHANGELOG.md` and bump the version:
+On push to `main`, the **Changesets** workflow opens a "Version Packages" PR that
+consumes the pending changesets. Merging it bumps `package.json` and regenerates
+`CHANGELOG.md`. To preview locally:
 
 ```bash
-npx changeset version    # updates CHANGELOG.md + package.json version
+pnpm install
+pnpm changeset version    # updates CHANGELOG.md + package.json version
 ```
 
 Then tag the matching `vX.Y.Z` release to trigger the signed/notarized build.
