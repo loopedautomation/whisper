@@ -1,5 +1,11 @@
 # looped-whisper
 
+## 0.1.1
+
+### Patch Changes
+
+- 983c2d5: Fix a crash on launch / when opening Hotkeys settings: the app bundle was missing the SwiftPM resource bundles (KeyboardShortcuts, swift-crypto, swift-transformers), so `Bundle.module` trapped at runtime. The build now copies them into the app and signs them.
+
 ## 0.1.0
 
 ### Minor Changes
