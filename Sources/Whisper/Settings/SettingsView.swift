@@ -190,6 +190,9 @@ private struct ModelTab: View {
                         Divider()
                     }
                 }
+                // Reserve space on the trailing edge so per-row buttons (e.g. Reveal
+                // in Finder) aren't hidden behind the macOS overlay scroller.
+                .padding(.trailing, 12)
             }
             .frame(maxHeight: .infinity)
 
