@@ -5,6 +5,7 @@ struct MenuBarContent: View {
     @ObservedObject private var state: AppState
     @ObservedObject private var audioDevices: AudioDeviceManager
     @ObservedObject private var models: ModelManager
+    @ObservedObject private var updates: UpdateChecker
     @Environment(\.openSettings) private var openSettings
 
     init(coordinator: Coordinator) {
@@ -12,6 +13,7 @@ struct MenuBarContent: View {
         self.state = coordinator.state
         self.audioDevices = coordinator.audioDevices
         self.models = coordinator.models
+        self.updates = coordinator.updateChecker
     }
 
     var body: some View {
@@ -68,6 +70,18 @@ struct MenuBarContent: View {
         Button("About Looped Whisper") {
             NSApp.activate(ignoringOtherApps: true)
             openSettings()
+        }
+
+        Divider()
+
+        if case .updateAvailable(let version, _) = updates.state {
+            Button("⬆︎ Update Available (\(version))") {
+                updates.openDownloadPage()
+            }
+        }
+
+        Button("Check for Updates…") {
+            coordinator.checkForUpdates()
         }
 
         Divider()
