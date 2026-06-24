@@ -12,6 +12,7 @@ final class Coordinator: ObservableObject {
     let loginItem: LoginItemManager
     let vocabulary: VocabularyStore
     let models: ModelManager
+    let audioDevices: AudioDeviceManager
 
     private let recorder = AudioRecorder()
     private let transcription = TranscriptionService()
@@ -31,6 +32,7 @@ final class Coordinator: ObservableObject {
         loginItem = LoginItemManager()
         vocabulary = VocabularyStore()
         models = ModelManager()
+        audioDevices = AudioDeviceManager()
         hud = HUDPanelController(state: state)
         bootstrap()
     }
