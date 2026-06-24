@@ -5,6 +5,5 @@
 node_modules/
 *.xcodeproj
 xcuserdata/
-Package.resolved
 Resources/AppIcon.icns
 CI_SIGNING_SECRETS.md
