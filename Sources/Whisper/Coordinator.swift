@@ -24,6 +24,10 @@ final class Coordinator: ObservableObject {
     private let hud: HUDPanelController
     private var escMonitorGlobal: Any?
     private var escMonitorLocal: Any?
+    // Incremental (live) insertion state for realtime mode.
+    private var incrementalActive = false
+    private var liveInsertedText = ""
+    private var lastPollText = ""
 
     init() {
         let state = AppState()
@@ -140,6 +144,14 @@ final class Coordinator: ObservableObject {
             state.setStatus(.recording)
             if !silent { SoundService.play(.start) }
             startEscMonitor()
+            // Decide live-insertion up front so toggling the setting mid-session
+            // can't corrupt what we type. Needs Accessibility (typing keystrokes).
+            permissions.refresh()
+            liveInsertedText = ""
+            lastPollText = ""
+            incrementalActive = currentMode() == .realtime
+                && currentInsertion() == .incremental
+                && permissions.accessibilityTrusted
             if currentMode() == .realtime {
                 hud.show()
                 startRealtimePolling()
@@ -165,6 +177,7 @@ final class Coordinator: ObservableObject {
         stopEscMonitor()
         stopRealtimePolling()
         _ = recorder.stop()          // discard samples
+        incrementalActive = false
         hud.hide()
         state.clearLive()
         state.setStatus(.idle)
@@ -218,9 +231,23 @@ final class Coordinator: ObservableObject {
             )
             if let text, !Task.isCancelled {
                 self.state.liveHypothesis = text
+                self.insertConfirmedDelta(from: text)
             }
             self.realtimeTask = nil
         }
+    }
+
+    /// Incremental insertion: a prefix that's identical across two consecutive
+    /// transcription passes is treated as "confirmed" and typed at the cursor
+    /// (only the part we haven't typed yet).
+    private func insertConfirmedDelta(from text: String) {
+        guard incrementalActive else { return }
+        let stable = String(text.commonPrefix(with: lastPollText))
+        lastPollText = text
+        guard stable.count > liveInsertedText.count, stable.hasPrefix(liveInsertedText) else { return }
+        let delta = String(stable.dropFirst(liveInsertedText.count))
+        TextInserter.typeString(delta)
+        liveInsertedText = stable
     }
 
     // MARK: - pipeline tail
@@ -233,6 +260,25 @@ final class Coordinator: ObservableObject {
                 vocabulary: vocabulary.terms
             )
             state.liveConfirmed = raw
+
+            // Incremental live-insertion: we've already typed the confirmed prefix
+            // during recording. Type only the final remainder, and skip rewrite
+            // (it would reformat text already in the document).
+            if incrementalActive {
+                let remainder: String
+                if raw.hasPrefix(liveInsertedText) {
+                    remainder = String(raw.dropFirst(liveInsertedText.count))
+                } else {
+                    remainder = String(raw.dropFirst(raw.commonPrefix(with: liveInsertedText).count))
+                }
+                TextInserter.typeString(remainder)
+                state.lastTranscript = raw
+                SoundService.play(.done)
+                if case .error = state.status {} else { state.setStatus(.idle) }
+                hud.hide()
+                state.clearLive()
+                return
+            }
 
             var finalText = raw
             if UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled), let cfg = rewriteConfig() {
@@ -294,6 +340,10 @@ final class Coordinator: ObservableObject {
 
     private func currentMode() -> TranscriptionMode {
         TranscriptionMode(rawValue: UserDefaults.standard.string(forKey: PrefKey.transcriptionMode) ?? "") ?? .batch
+    }
+
+    private func currentInsertion() -> RealtimeInsertion {
+        RealtimeInsertion(rawValue: UserDefaults.standard.string(forKey: PrefKey.realtimeInsertion) ?? "") ?? .onStop
     }
 
     private func language() -> String {
