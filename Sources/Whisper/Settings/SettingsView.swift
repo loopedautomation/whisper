@@ -186,7 +186,7 @@ private struct ModelTab: View {
             ScrollView {
                 VStack(spacing: 0) {
                     ForEach(WhisperModel.known) { model in
-                        ModelRow(model: model, manager: models)
+                        ModelRow(model: model, manager: models, activeModelID: selectedModel)
                         Divider()
                     }
                 }
@@ -212,6 +212,12 @@ private struct ModelTab: View {
 private struct ModelRow: View {
     let model: WhisperModel
     @ObservedObject var manager: ModelManager
+    /// The currently selected/active model; deleting it would break transcription,
+    /// so the Delete affordance is disabled for it.
+    var activeModelID: String
+    @State private var confirmingDelete = false
+
+    private var isActive: Bool { model.id == activeModelID }
 
     var body: some View {
         HStack(spacing: 10) {
@@ -220,9 +226,18 @@ private struct ModelRow: View {
                 Text(model.note).font(.caption).foregroundStyle(.secondary)
             }
             Spacer()
-            trailing.frame(width: 150, alignment: .trailing)
+            trailing.frame(width: 180, alignment: .trailing)
         }
         .padding(.vertical, 6)
+        .confirmationDialog(
+            "Delete the \(model.label) model?",
+            isPresented: $confirmingDelete, titleVisibility: .visible
+        ) {
+            Button("Delete", role: .destructive) { manager.delete(model.id) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This removes the downloaded files from disk. You can download it again at any time.")
+        }
     }
 
     @ViewBuilder private var trailing: some View {
@@ -233,6 +248,10 @@ private struct ModelRow: View {
                     .labelStyle(.iconOnly).foregroundStyle(.green)
                 Button { manager.revealInFinder(model.id) } label: { Image(systemName: "folder") }
                     .buttonStyle(.borderless).help("Reveal in Finder")
+                Button { confirmingDelete = true } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+                    .disabled(isActive)
+                    .help(isActive ? "Can’t delete the active model" : "Delete from disk")
             }
         case .notDownloaded:
             Button("Download") { manager.startDownload(model.id) }

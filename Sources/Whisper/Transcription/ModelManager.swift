@@ -105,6 +105,25 @@ final class ModelManager: ObservableObject {
         states[id] = isDownloaded(id) ? .downloaded : .notDownloaded
     }
 
+    /// Removes a downloaded model's files from disk and flips its state back to
+    /// `.notDownloaded`. Cancels any in-flight download for the same id first.
+    /// Returns `false` (leaving a `.failed` state) if the files couldn't be removed.
+    @discardableResult
+    func delete(_ id: String) -> Bool {
+        cancelDownload(id)
+        let folder = ModelStorage.folder(for: id)
+        do {
+            if FileManager.default.fileExists(atPath: folder.path) {
+                try FileManager.default.removeItem(at: folder)
+            }
+            states[id] = .notDownloaded
+            return true
+        } catch {
+            states[id] = .failed("Couldn’t delete: \(error.localizedDescription)")
+            return false
+        }
+    }
+
     private func performDownload(_ id: String) async -> Bool {
         states[id] = .downloading(0)
         defer { downloadTasks[id] = nil }
