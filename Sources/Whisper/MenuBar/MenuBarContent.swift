@@ -3,11 +3,13 @@ import SwiftUI
 struct MenuBarContent: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var state: AppState
+    @ObservedObject private var audioDevices: AudioDeviceManager
     @Environment(\.openSettings) private var openSettings
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
         self.state = coordinator.state
+        self.audioDevices = coordinator.audioDevices
     }
 
     var body: some View {
@@ -35,6 +37,16 @@ struct MenuBarContent: View {
         }
 
         Divider()
+
+        Picker("Microphone", selection: $audioDevices.selectedUID) {
+            Text("System Default").tag(AudioInputDevices.systemDefaultUID)
+            if !audioDevices.devices.isEmpty {
+                Divider()
+                ForEach(audioDevices.devices) { device in
+                    Text(device.name).tag(device.uid)
+                }
+            }
+        }
 
         Text("Model: \(WhisperModel.label(for: selectedModel))")
 

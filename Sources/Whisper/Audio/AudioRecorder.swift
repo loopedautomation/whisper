@@ -1,5 +1,6 @@
 import Foundation
 import AVFoundation
+import CoreAudio
 
 /// Captures microphone audio and resamples it to the 16 kHz mono Float32 format
 /// Whisper expects. Used for batch mode (the full buffer is returned on `stop`).
@@ -39,6 +40,10 @@ final class AudioRecorder {
         lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
 
         let input = engine.inputNode
+        // Route capture to the user-selected input device. When the persisted UID is
+        // empty (or the device is gone) we leave the input node on the OS default,
+        // which keeps following the system as the user changes inputs.
+        applySelectedInputDevice(to: input)
         let inputFormat = input.outputFormat(forBus: 0)
 
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
@@ -75,6 +80,27 @@ final class AudioRecorder {
     func snapshot() -> [Float] {
         lock.lock(); defer { lock.unlock() }
         return samples
+    }
+
+    /// Points the engine's input node at the persisted device. A non-empty,
+    /// currently-present UID overrides the OS default; otherwise capture follows the
+    /// system default input device.
+    private func applySelectedInputDevice(to input: AVAudioInputNode) {
+        let uid = UserDefaults.standard.string(forKey: PrefKey.inputDeviceUID) ?? ""
+        guard let deviceID = AudioInputDevices.deviceID(forUID: uid) else { return }
+
+        // The input node is backed by an HAL audio unit; setting its current device
+        // reroutes capture without rebuilding the engine.
+        guard let unit = input.audioUnit else { return }
+        var device = deviceID
+        AudioUnitSetProperty(
+            unit,
+            kAudioOutputUnitProperty_CurrentDevice,
+            kAudioUnitScope_Global,
+            0,
+            &device,
+            UInt32(MemoryLayout<AudioDeviceID>.size)
+        )
     }
 
     private func append(buffer: AVAudioPCMBuffer) {

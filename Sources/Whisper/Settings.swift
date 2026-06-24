@@ -17,6 +17,7 @@ enum PrefKey {
     static let rewritePrompt = "rewritePrompt"            // user prompt template, uses {{input}}
     static let language = "language"                       // whisper language hint, "" = auto
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
+    static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
 }
 
 enum TranscriptionMode: String, CaseIterable, Identifiable {
@@ -83,7 +84,8 @@ enum DefaultPref {
             PrefKey.rewriteModel: "claude-haiku-4-5-20251001",
             PrefKey.rewriteBaseURL: "https://api.openai.com/v1",
             PrefKey.rewritePrompt: DefaultPref.rewritePromptTemplate,
-            PrefKey.language: "en"
+            PrefKey.language: "en",
+            PrefKey.inputDeviceUID: ""   // follow system default
         ])
     }
 }
