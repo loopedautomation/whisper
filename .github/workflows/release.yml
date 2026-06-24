@@ -40,11 +40,24 @@ jobs:
           security set-key-partition-list -S apple-tool:,apple:,codesign: \
             -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
 
-          security find-identity -v -p codesigning
+          echo "Available codesigning identities:"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          # Notarization requires a "Developer ID Application" certificate.
+          IDENTITY_LINE="$(security find-identity -v -p codesigning "$KEYCHAIN_PATH" | grep 'Developer ID Application' | head -1 || true)"
+          if [ -z "$IDENTITY_LINE" ]; then
+            echo "::error::No 'Developer ID Application' certificate found in the imported .p12."
+            echo "::error::Notarization requires that specific certificate type — an 'Apple Development' or 'Apple Distribution' cert will NOT work."
+            echo "::error::Create a 'Developer ID Application' cert at https://developer.apple.com/account/resources/certificates, export it (with its private key) as a .p12, and update MACOS_CERTIFICATE_P12_BASE64."
+            exit 1
+          fi
+          SIGN_ID="$(echo "$IDENTITY_LINE" | sed -E 's/.*"([^"]+)".*/\1/')"
+          echo "SIGN_ID=$SIGN_ID" >> "$GITHUB_ENV"
+          echo "Using signing identity: $SIGN_ID"
 
       - name: Build & sign app
         env:
-          WHISPER_SIGN_ID: ${{ secrets.MACOS_SIGN_IDENTITY }}
+          WHISPER_SIGN_ID: ${{ env.SIGN_ID }}
         run: make build
 
       - name: Notarize & staple
