@@ -53,6 +53,12 @@ struct MenuBarContent: View {
             }
         }
 
+        if state.hasPendingCrashLogs {
+            Button("⚠︎ Review Crash Report…") {
+                coordinator.presentPendingCrashReports()
+            }
+        }
+
         Divider()
 
         let installed = WhisperModel.known.filter { models.isDownloaded($0.id) }
