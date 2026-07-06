@@ -17,6 +17,7 @@ enum PrefKey {
     static let rewritePrompt = "rewritePrompt"            // user prompt template, uses {{input}}
     static let language = "language"                       // legacy single-language hint, "" = auto
     static let preferredLanguages = "preferredLanguages"   // comma-joined ISO codes; empty = auto-detect all
+    static let languageRepairEnabled = "languageRepairEnabled"   // opt-in: AI-repair cross-language mixups (sends transcript to your Rewrite provider); off by default to stay fully local
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
     static let soundVolume = "soundVolume"                // 0.0...1.0
@@ -103,8 +104,12 @@ struct WhisperLanguage: Identifiable, Hashable {
     /// Human-readable summary for the picker label.
     static func summary(for codes: Set<String>) -> String {
         if codes.isEmpty { return "Auto-detect (all)" }
-        let labels = known.filter { codes.contains($0.code) }.map(\.label)
-        return labels.joined(separator: ", ")
+        return labels(for: codes).joined(separator: ", ")
+    }
+
+    /// Catalog-ordered labels for a set of codes (e.g. for an LLM prompt hint).
+    static func labels(for codes: Set<String>) -> [String] {
+        known.filter { codes.contains($0.code) }.map(\.label)
     }
 
     /// The language policy for a given selection: exactly one selected → pin

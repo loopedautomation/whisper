@@ -334,9 +334,18 @@ final class Coordinator: ObservableObject {
             }
 
             var finalText = raw
-            if UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled), let cfg = rewriteConfig() {
+            let rewriteOn = UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled)
+            let languageHint = languageRepairHint()
+            // Language repair rides the same rewrite call so a recording never
+            // pays for two LLM round-trips: if general rewrite is off, fall back
+            // to a pass-through template so only the repair instruction applies.
+            if rewriteOn || !languageHint.isEmpty, let cfg = rewriteConfig() {
                 state.setStatus(.rewriting)
-                let outcome = await RewriteService.rewriteResult(raw, vocabulary: vocabulary.terms, config: cfg)
+                let effectiveConfig = rewriteOn ? cfg : RewriteService.Config(
+                    provider: cfg.provider, model: cfg.model, apiKey: cfg.apiKey,
+                    promptTemplate: RewriteService.languageRepairOnlyTemplate, timeout: cfg.timeout)
+                let outcome = await RewriteService.rewriteResult(
+                    raw, vocabulary: vocabulary.terms, config: effectiveConfig, languageHint: languageHint)
                 if let failure = outcome.failure {
                     // Rewrite failed: deliver the raw transcript but tell the user why.
                     state.setError(AppError(failure, hint: "delivered the raw transcript instead"))
@@ -399,11 +408,26 @@ final class Coordinator: ObservableObject {
         RealtimeInsertion(rawValue: UserDefaults.standard.string(forKey: PrefKey.realtimeInsertion) ?? "") ?? .onStop
     }
 
-    private func languageSelection() -> LanguageSelection {
+    private func selectedLanguageCodes() -> Set<String> {
         let stored = UserDefaults.standard.string(forKey: PrefKey.preferredLanguages)
             ?? UserDefaults.standard.string(forKey: PrefKey.language)   // migrate legacy pref
             ?? ""
-        return WhisperLanguage.selection(for: WhisperLanguage.codes(from: stored))
+        return WhisperLanguage.codes(from: stored)
+    }
+
+    private func languageSelection() -> LanguageSelection {
+        WhisperLanguage.selection(for: selectedLanguageCodes())
+    }
+
+    /// Language labels to hand `RewriteService` for cross-language repair.
+    /// Opt-in (sends the transcript to the user's configured Rewrite provider)
+    /// and only meaningful with 2+ languages selected — `[]` otherwise, so the
+    /// app stays fully local unless the user turns this on.
+    private func languageRepairHint() -> [String] {
+        guard UserDefaults.standard.bool(forKey: PrefKey.languageRepairEnabled) else { return [] }
+        let codes = selectedLanguageCodes()
+        guard codes.count > 1 else { return [] }
+        return WhisperLanguage.labels(for: codes)
     }
 
     /// Language policy for a realtime pass. Polling re-transcribes the whole
