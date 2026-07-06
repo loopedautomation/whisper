@@ -1,5 +1,12 @@
 # looped-whisper
 
+## 0.4.0
+
+### Minor Changes
+
+- 318dd2b: Add a multi-language selector for transcription: pick the languages you speak from a popover checklist in Settings → Model. Select exactly one to pin it, or several (or none) to let the model auto-detect the language of each recording.
+- 318dd2b: When several languages are selected, auto-detection is now restricted to just those languages — a recording can no longer be mis-transcribed in a language you never selected.
+
 ## 0.3.0
 
 ### Minor Changes
