@@ -28,6 +28,9 @@ final class Coordinator: ObservableObject {
     private var incrementalActive = false
     private var liveInsertedText = ""
     private var lastPollText = ""
+    // Language detected once per recording when several languages are selected
+    // (restricted mode); pinned for the rest of the session.
+    private var detectedLanguage: String?
 
     init() {
         let state = AppState()
@@ -149,6 +152,7 @@ final class Coordinator: ObservableObject {
             permissions.refresh()
             liveInsertedText = ""
             lastPollText = ""
+            detectedLanguage = nil
             incrementalActive = currentMode() == .realtime
                 && currentInsertion() == .incremental
                 && permissions.accessibilityTrusted
@@ -226,7 +230,7 @@ final class Coordinator: ObservableObject {
             guard let self else { return }
             let text = try? await self.transcription.transcribe(
                 samples: snapshot,
-                language: self.language(),
+                selection: await self.realtimeSelection(snapshot: snapshot),
                 vocabulary: self.vocabulary.terms
             )
             if let text, !Task.isCancelled {
@@ -254,9 +258,13 @@ final class Coordinator: ObservableObject {
 
     private func finishPipeline(samples: [Float]) async {
         do {
+            // Reuse the language detected during realtime polling (same
+            // recording); otherwise restricted detection runs inside transcribe.
+            let selection: LanguageSelection =
+                detectedLanguage.map { .pinned($0) } ?? languageSelection()
             let raw = try await transcription.transcribe(
                 samples: samples,
-                language: language(),
+                selection: selection,
                 vocabulary: vocabulary.terms
             )
             state.liveConfirmed = raw
@@ -346,13 +354,27 @@ final class Coordinator: ObservableObject {
         RealtimeInsertion(rawValue: UserDefaults.standard.string(forKey: PrefKey.realtimeInsertion) ?? "") ?? .onStop
     }
 
-    private func language() -> String {
-        // Exactly one preferred language → pin it; zero or several → "" so the
-        // model auto-detects the language of each recording.
+    private func languageSelection() -> LanguageSelection {
         let stored = UserDefaults.standard.string(forKey: PrefKey.preferredLanguages)
             ?? UserDefaults.standard.string(forKey: PrefKey.language)   // migrate legacy pref
             ?? ""
-        return WhisperLanguage.hint(for: WhisperLanguage.codes(from: stored))
+        return WhisperLanguage.selection(for: WhisperLanguage.codes(from: stored))
+    }
+
+    /// Language policy for a realtime pass. Polling re-transcribes the whole
+    /// buffer every ~1.5 s, and re-detecting on each pass could flip the
+    /// language mid-recording and corrupt incremental insertion — so in
+    /// restricted mode the language is detected once (after ~2 s of audio,
+    /// enough to trust the result) and pinned for the rest of the recording.
+    private func realtimeSelection(snapshot: [Float]) async -> LanguageSelection {
+        let selection = languageSelection()
+        guard case .restricted(let candidates) = selection else { return selection }
+        if let cached = detectedLanguage { return .pinned(cached) }
+        guard snapshot.count >= Int(AudioRecorder.targetSampleRate) * 2 else { return .auto }
+        guard let detected = try? await transcription.detectLanguage(samples: snapshot, among: candidates),
+              !detected.isEmpty else { return .auto }
+        detectedLanguage = detected
+        return .pinned(detected)
     }
 
     private func rewriteConfig() -> RewriteService.Config? {

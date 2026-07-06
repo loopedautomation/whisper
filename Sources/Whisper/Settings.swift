@@ -107,11 +107,30 @@ struct WhisperLanguage: Identifiable, Hashable {
         return labels.joined(separator: ", ")
     }
 
-    /// The single language hint to hand the transcriber for a given selection:
-    /// exactly one selected → pin it; zero or many → "" (auto-detect).
-    static func hint(for codes: Set<String>) -> String {
-        codes.count == 1 ? (codes.first ?? "") : ""
+    /// The language policy for a given selection: exactly one selected → pin
+    /// it; none → free auto-detect; several → detect, but only among those.
+    static func selection(for codes: Set<String>) -> LanguageSelection {
+        switch codes.count {
+        case 0: return .auto
+        case 1: return .pinned(codes.first!)
+        default: return .restricted(codes)
+        }
     }
+
+    /// Given detection output, the language to pin: the detected language if
+    /// the user selected it, otherwise the best-scoring selected candidate —
+    /// so detection can never land on a language outside the selection.
+    static func pick(detected: String, probs: [String: Float], among candidates: Set<String>) -> String {
+        if candidates.contains(detected) { return detected }
+        return candidates.max { (probs[$0] ?? 0) < (probs[$1] ?? 0) } ?? ""
+    }
+}
+
+/// How the transcriber should choose the language of a recording.
+enum LanguageSelection: Equatable {
+    case auto                      // no preference — the model detects freely
+    case pinned(String)            // exactly one language, always
+    case restricted(Set<String>)   // detect, but only among these codes
 }
 
 /// Defaults applied on first launch.

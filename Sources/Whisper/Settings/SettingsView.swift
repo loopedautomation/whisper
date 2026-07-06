@@ -167,6 +167,14 @@ private struct ModelTab: View {
         if languages.contains(code) { languages.remove(code) } else { languages.insert(code) }
     }
 
+    private var languageCaption: String {
+        switch languages.count {
+        case 0: return "Auto-detects the language of each recording."
+        case 1: return "Pinned — everything is transcribed as this language."
+        default: return "Detects the language of each recording — only among your selection."
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack {
@@ -210,9 +218,7 @@ private struct ModelTab: View {
                         .padding(12)
                     }
 
-                    Text(languages.count == 1
-                         ? "Pinned — everything is transcribed as this language."
-                         : "Auto-detects the language of each recording.")
+                    Text(languageCaption)
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
