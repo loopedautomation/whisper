@@ -30,4 +30,26 @@ final class WhisperTests: XCTestCase {
         XCTAssertEqual(WhisperModel.label(for: "base"), "Base")
         XCTAssertEqual(WhisperModel.label(for: "unknown-id"), "unknown-id")
     }
+
+    /// The preferredLanguages pref round-trips through codes(from:)/string(from:),
+    /// tolerating whitespace and empty segments, with catalog-stable ordering.
+    func testLanguageCodesRoundTrip() {
+        let codes = WhisperLanguage.codes(from: "de, fr,,en ")
+        XCTAssertEqual(codes, ["en", "de", "fr"])
+        XCTAssertEqual(WhisperLanguage.string(from: codes), "en,de,fr")
+        XCTAssertEqual(WhisperLanguage.codes(from: ""), [])
+    }
+
+    /// Exactly one selected language pins it; zero or several mean auto-detect.
+    func testLanguageHint() {
+        XCTAssertEqual(WhisperLanguage.hint(for: ["de"]), "de")
+        XCTAssertEqual(WhisperLanguage.hint(for: []), "")
+        XCTAssertEqual(WhisperLanguage.hint(for: ["de", "en"]), "")
+    }
+
+    func testLanguageSummary() {
+        XCTAssertEqual(WhisperLanguage.summary(for: []), "Auto-detect (all)")
+        XCTAssertEqual(WhisperLanguage.summary(for: ["de"]), "German")
+        XCTAssertEqual(WhisperLanguage.summary(for: ["de", "en"]), "English, German")
+    }
 }
