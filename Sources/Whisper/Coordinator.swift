@@ -13,6 +13,7 @@ final class Coordinator: ObservableObject {
     let vocabulary: VocabularyStore
     let models: ModelManager
     let audioDevices: AudioDeviceManager
+    let updateChecker: UpdateChecker
 
     private let recorder = AudioRecorder()
     private let transcription = TranscriptionService()
@@ -37,6 +38,7 @@ final class Coordinator: ObservableObject {
         vocabulary = VocabularyStore()
         models = ModelManager()
         audioDevices = AudioDeviceManager()
+        updateChecker = UpdateChecker()
         hud = HUDPanelController(state: state)
         bootstrap()
     }
@@ -50,6 +52,49 @@ final class Coordinator: ObservableObject {
         hotkeys?.register()
         configureFnMonitor()
         preloadModelInBackground()
+        checkForUpdatesInBackground()
+    }
+
+    // MARK: - updates
+
+    /// Silent best-effort check at launch; failures are swallowed.
+    private func checkForUpdatesInBackground() {
+        Task { await updateChecker.check() }
+    }
+
+    /// User-initiated check from the menu; surfaces the result either way.
+    func checkForUpdates() {
+        Task {
+            await updateChecker.check()
+            switch updateChecker.state {
+            case .upToDate:
+                presentUpToDateAlert()
+            case .failed:
+                presentUpdateCheckFailedAlert()
+            case .updateAvailable, .checking, .idle:
+                break   // surfaced inline in the menu / About tab
+            }
+        }
+    }
+
+    private func presentUpToDateAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "You're up to date"
+        alert.informativeText = "Looped Whisper \(updateChecker.currentVersion) is the latest version."
+        alert.runModal()
+    }
+
+    private func presentUpdateCheckFailedAlert() {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Couldn't check for updates"
+        alert.informativeText = "Please check your connection and try again, or visit the releases page."
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Open Releases")
+        if alert.runModal() == .alertSecondButtonReturn {
+            updateChecker.openDownloadPage()
+        }
     }
 
     // MARK: - fn key
