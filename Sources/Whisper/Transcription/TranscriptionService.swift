@@ -31,10 +31,23 @@ actor TranscriptionService {
     }
 
     /// Transcribes the given samples. `vocabulary` biases recognition toward the
-    /// listed terms; `language` is an optional ISO hint ("" = auto-detect).
-    func transcribe(samples: [Float], language: String, vocabulary: [String]) async throws -> String {
+    /// listed terms; `selection` decides the language (see `LanguageSelection`).
+    func transcribe(samples: [Float], selection: LanguageSelection, vocabulary: [String]) async throws -> String {
         guard let pipe else { throw TranscriptionError.modelNotLoaded }
         guard !samples.isEmpty else { throw TranscriptionError.empty }
+
+        let language: String
+        switch selection {
+        case .auto:
+            language = ""
+        case .pinned(let code):
+            language = code
+        case .restricted(let candidates):
+            // Detect first, then pin the best selected candidate. A detection
+            // failure degrades to unrestricted auto-detect instead of failing
+            // the whole run.
+            language = (try? await detectLanguage(samples: samples, among: candidates)) ?? ""
+        }
 
         var options = DecodingOptions()
         if !language.isEmpty {
@@ -50,6 +63,16 @@ actor TranscriptionService {
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
         let text = results.map(\.text).joined(separator: " ")
         return text.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    /// Detects the spoken language and returns the best-scoring candidate
+    /// among `candidates`.
+    func detectLanguage(samples: [Float], among candidates: Set<String>) async throws -> String {
+        guard let pipe else { throw TranscriptionError.modelNotLoaded }
+        guard !samples.isEmpty else { throw TranscriptionError.empty }
+        // [sic] WhisperKit 0.18 spells the array-based variant "detectLangauge".
+        let result = try await pipe.detectLangauge(audioArray: samples)
+        return WhisperLanguage.pick(detected: result.language, probs: result.langProbs, among: candidates)
     }
 
     var currentModel: String? { loadedModel }

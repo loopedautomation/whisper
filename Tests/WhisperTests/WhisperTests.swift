@@ -40,11 +40,24 @@ final class WhisperTests: XCTestCase {
         XCTAssertEqual(WhisperLanguage.codes(from: ""), [])
     }
 
-    /// Exactly one selected language pins it; zero or several mean auto-detect.
-    func testLanguageHint() {
-        XCTAssertEqual(WhisperLanguage.hint(for: ["de"]), "de")
-        XCTAssertEqual(WhisperLanguage.hint(for: []), "")
-        XCTAssertEqual(WhisperLanguage.hint(for: ["de", "en"]), "")
+    /// None selected → free auto-detect; one → pinned; several → detection
+    /// restricted to the selected set.
+    func testLanguageSelection() {
+        XCTAssertEqual(WhisperLanguage.selection(for: []), .auto)
+        XCTAssertEqual(WhisperLanguage.selection(for: ["de"]), .pinned("de"))
+        XCTAssertEqual(WhisperLanguage.selection(for: ["de", "en"]), .restricted(["de", "en"]))
+    }
+
+    /// The detected language wins when the user selected it; otherwise the
+    /// best-scoring selected candidate is pinned — never an unselected one.
+    func testLanguagePick() {
+        XCTAssertEqual(
+            WhisperLanguage.pick(detected: "de", probs: ["de": 0.9, "en": 0.1], among: ["de", "en"]),
+            "de")
+        XCTAssertEqual(
+            WhisperLanguage.pick(detected: "nl", probs: ["nl": 0.6, "de": 0.3, "en": 0.1], among: ["de", "en"]),
+            "de")
+        XCTAssertEqual(WhisperLanguage.pick(detected: "nl", probs: [:], among: []), "")
     }
 
     func testLanguageSummary() {
