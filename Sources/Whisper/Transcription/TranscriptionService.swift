@@ -61,8 +61,14 @@ actor TranscriptionService {
         }
 
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
-        let text = results.map(\.text).joined(separator: " ")
-        return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        // A non-empty recording can still decode to nothing (silence, noise, a
+        // very short/quiet clip) — treat that the same as "no speech detected"
+        // rather than returning "" as if it were a successful transcript, which
+        // let the caller play the success chime and skip delivery with no
+        // visible warning at all.
+        guard !text.isEmpty else { throw TranscriptionError.empty }
+        return text
     }
 
     /// Detects the spoken language and returns the best-scoring candidate
