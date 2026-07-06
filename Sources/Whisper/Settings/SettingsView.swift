@@ -147,6 +147,7 @@ private struct ModelTab: View {
     @ObservedObject private var models: ModelManager
     @State private var selectedModel = d.string(forKey: PrefKey.selectedModel) ?? "base"
     @State private var languages = WhisperLanguage.codes(from: d.string(forKey: PrefKey.preferredLanguages) ?? "en")
+    @State private var showingLanguages = false
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
@@ -178,19 +179,36 @@ private struct ModelTab: View {
             HStack(alignment: .top) {
                 Text("Language").frame(width: 110, alignment: .leading)
                 VStack(alignment: .leading, spacing: 4) {
-                    Menu {
-                        // Multi-select: check every language you speak. The menu
-                        // stays open so you can pick several in one pass.
-                        ForEach(WhisperLanguage.known.filter { !$0.code.isEmpty }) { lang in
-                            Toggle(isOn: Binding(
-                                get: { languages.contains(lang.code) },
-                                set: { _ in toggle(lang.code) }
-                            )) { Text(lang.label) }
-                        }
+                    // A popover (not a Menu) so checking several languages in one
+                    // pass works — macOS menus dismiss after every item click.
+                    Button {
+                        showingLanguages.toggle()
                     } label: {
-                        Text(WhisperLanguage.summary(for: languages))
+                        HStack {
+                            Text(WhisperLanguage.summary(for: languages))
+                                .lineLimit(1).truncationMode(.tail)
+                            Spacer()
+                            Image(systemName: "chevron.up.chevron.down")
+                                .font(.caption2).foregroundStyle(.secondary)
+                        }
                     }
                     .frame(maxWidth: 220)
+                    .popover(isPresented: $showingLanguages, arrowEdge: .bottom) {
+                        LazyVGrid(
+                            columns: [GridItem(.fixed(120), alignment: .leading),
+                                      GridItem(.fixed(120), alignment: .leading)],
+                            alignment: .leading, spacing: 6
+                        ) {
+                            ForEach(WhisperLanguage.known.filter { !$0.code.isEmpty }) { lang in
+                                Toggle(lang.label, isOn: Binding(
+                                    get: { languages.contains(lang.code) },
+                                    set: { _ in toggle(lang.code) }
+                                ))
+                                .toggleStyle(.checkbox)
+                            }
+                        }
+                        .padding(12)
+                    }
 
                     Text(languages.count == 1
                          ? "Pinned — everything is transcribed as this language."
