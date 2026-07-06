@@ -1,5 +1,11 @@
 # looped-whisper
 
+## 0.3.0
+
+### Minor Changes
+
+- d9b4d5e: Add an in-app update check that compares the running version against the latest GitHub release and notifies you when a newer version is available, with a link to download it.
+
 ## 0.2.0
 
 ### Minor Changes
