@@ -5,6 +5,9 @@ import Foundation
 /// Resilient by design: any failure falls back to the raw transcript.
 struct RewriteService {
     static let keychainAccount = "rewrite-api-key"
+    /// Pass-through template for a repair-only call (no user rewrite instruction
+    /// applied) — used when language repair runs without general rewrite enabled.
+    static let languageRepairOnlyTemplate = "{{input}}"
 
     enum Provider {
         case anthropic
@@ -39,13 +42,16 @@ struct RewriteService {
 
     /// Returns the cleaned text, or the original `transcript` on any error.
     /// Kept for callers that only need the text; see `rewriteResult` for the reason.
-    static func rewrite(_ transcript: String, vocabulary: [String], config: Config) async -> String {
-        await rewriteResult(transcript, vocabulary: vocabulary, config: config).text
+    /// `languageHint`: when the recording may switch between 2+ languages, pass
+    /// their labels (e.g. ["English", "German"]) to ask the model to repair
+    /// words phonetically misrecognized in the wrong language.
+    static func rewrite(_ transcript: String, vocabulary: [String], config: Config, languageHint: [String] = []) async -> String {
+        await rewriteResult(transcript, vocabulary: vocabulary, config: config, languageHint: languageHint).text
     }
 
     /// Like `rewrite` but reports why the rewrite failed (e.g. bad API key,
     /// network/timeout, provider error) so the UI can tell the user.
-    static func rewriteResult(_ transcript: String, vocabulary: [String], config: Config) async -> Outcome {
+    static func rewriteResult(_ transcript: String, vocabulary: [String], config: Config, languageHint: [String] = []) async -> Outcome {
         guard !transcript.isEmpty else { return Outcome(text: transcript, failure: nil) }
         guard !config.apiKey.isEmpty else {
             return Outcome(text: transcript, failure: "No AI API key configured.")
@@ -54,9 +60,9 @@ struct RewriteService {
             let cleaned: String
             switch config.provider {
             case .anthropic:
-                cleaned = try await callAnthropic(transcript, vocabulary: vocabulary, config: config)
+                cleaned = try await callAnthropic(transcript, vocabulary: vocabulary, config: config, languageHint: languageHint)
             case .openaiCompatible(let baseURL):
-                cleaned = try await callOpenAI(transcript, vocabulary: vocabulary, baseURL: baseURL, config: config)
+                cleaned = try await callOpenAI(transcript, vocabulary: vocabulary, baseURL: baseURL, config: config, languageHint: languageHint)
             }
             return Outcome(text: cleaned, failure: nil)
         } catch {
@@ -88,7 +94,7 @@ struct RewriteService {
 
     /// App-controlled system prompt. Sets the role + guardrails and injects the
     /// vocabulary list automatically (the user does not edit this).
-    private static func systemPrompt(vocabulary: [String]) -> String {
+    private static func systemPrompt(vocabulary: [String], languageHint: [String]) -> String {
         var p = """
         You transform raw speech-to-text transcripts according to the user's \
         instruction. Return ONLY the resulting text — no preamble, explanations, \
@@ -97,6 +103,17 @@ struct RewriteService {
         """
         if !vocabulary.isEmpty {
             p += "\n\nPreserve and prefer these exact spellings when they appear: " + vocabulary.joined(separator: ", ") + "."
+        }
+        if languageHint.count > 1 {
+            p += """
+            \n\nThe speaker may switch between these languages within a single recording: \
+            \(languageHint.joined(separator: ", ")). The transcript may contain words or \
+            short phrases that were phonetically misrecognized in the wrong language \
+            (e.g. a German word transcribed as nonsense English). Silently correct these \
+            to the intended word in its correct language, preserving meaning and the \
+            speaker's code-switching — do not translate correctly-transcribed words into \
+            a single language.
+            """
         }
         return p
     }
@@ -109,7 +126,7 @@ struct RewriteService {
 
     // MARK: - Anthropic Messages API
 
-    private static func callAnthropic(_ transcript: String, vocabulary: [String], config: Config) async throws -> String {
+    private static func callAnthropic(_ transcript: String, vocabulary: [String], config: Config, languageHint: [String]) async throws -> String {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -119,7 +136,7 @@ struct RewriteService {
         let body: [String: Any] = [
             "model": config.model,
             "max_tokens": 1024,
-            "system": systemPrompt(vocabulary: vocabulary),
+            "system": systemPrompt(vocabulary: vocabulary, languageHint: languageHint),
             "messages": [["role": "user", "content": userMessage(transcript, template: config.promptTemplate)]]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
@@ -134,7 +151,7 @@ struct RewriteService {
 
     // MARK: - OpenAI-compatible Chat Completions API
 
-    private static func callOpenAI(_ transcript: String, vocabulary: [String], baseURL: String, config: Config) async throws -> String {
+    private static func callOpenAI(_ transcript: String, vocabulary: [String], baseURL: String, config: Config, languageHint: [String]) async throws -> String {
         let url = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/chat/completions")!
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
@@ -144,7 +161,7 @@ struct RewriteService {
         let body: [String: Any] = [
             "model": config.model,
             "messages": [
-                ["role": "system", "content": systemPrompt(vocabulary: vocabulary)],
+                ["role": "system", "content": systemPrompt(vocabulary: vocabulary, languageHint: languageHint)],
                 ["role": "user", "content": userMessage(transcript, template: config.promptTemplate)]
             ]
         ]

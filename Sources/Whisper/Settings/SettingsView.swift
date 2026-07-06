@@ -148,6 +148,7 @@ private struct ModelTab: View {
     @State private var selectedModel = d.string(forKey: PrefKey.selectedModel) ?? "base"
     @State private var languages = WhisperLanguage.codes(from: d.string(forKey: PrefKey.preferredLanguages) ?? "en")
     @State private var showingLanguages = false
+    @State private var languageRepairEnabled = d.bool(forKey: PrefKey.languageRepairEnabled)
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
@@ -161,6 +162,7 @@ private struct ModelTab: View {
     private var isDirty: Bool {
         selectedModel != d.string(forKey: PrefKey.selectedModel)
         || languages != storedLanguages
+        || languageRepairEnabled != d.bool(forKey: PrefKey.languageRepairEnabled)
     }
 
     private func toggle(_ code: String) {
@@ -220,6 +222,17 @@ private struct ModelTab: View {
 
                     Text(languageCaption)
                         .font(.caption).foregroundStyle(.secondary)
+
+                    if languages.count > 1 {
+                        Toggle("Fix cross-language mix-ups with AI", isOn: $languageRepairEnabled)
+                            .toggleStyle(.checkbox)
+                        Text(languageRepairEnabled
+                             ? "Sends the transcript to your Rewrite provider (Settings → Rewrite) to repair words transcribed in the wrong language, e.g. mid-sentence switches. Not applied during realtime incremental typing."
+                             : "Off — mid-sentence language switches may come out garbled. Turning this on sends the transcript to your Rewrite provider to repair it; the app stays fully local otherwise.")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: 320, alignment: .leading)
+                    }
                 }
             }
 
@@ -249,6 +262,7 @@ private struct ModelTab: View {
 
             SaveBar(disabled: !isDirty) {
                 d.set(WhisperLanguage.string(from: languages), forKey: PrefKey.preferredLanguages)
+                d.set(languageRepairEnabled, forKey: PrefKey.languageRepairEnabled)
                 if selectedModel != d.string(forKey: PrefKey.selectedModel) {
                     d.set(selectedModel, forKey: PrefKey.selectedModel)
                     Task { await coordinator.loadModel(selectedModel) }

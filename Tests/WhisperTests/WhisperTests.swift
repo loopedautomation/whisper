@@ -19,6 +19,13 @@ final class WhisperTests: XCTestCase {
         XCTAssertEqual(result, "helo wrld")
     }
 
+    /// The languageHint parameter must not disturb the no-key fallback contract.
+    func testRewriteFallsBackWithoutKeyEvenWithLanguageHint() async {
+        let cfg = RewriteService.Config(provider: .anthropic, model: "x", apiKey: "", promptTemplate: "{{input}}")
+        let result = await RewriteService.rewrite("helo wrld", vocabulary: [], config: cfg, languageHint: ["German", "English"])
+        XCTAssertEqual(result, "helo wrld")
+    }
+
     /// Empty transcript is returned unchanged regardless of config.
     func testRewriteEmptyTranscript() async {
         let cfg = RewriteService.Config(provider: .anthropic, model: "x", apiKey: "key", promptTemplate: "{{input}}")
@@ -64,5 +71,11 @@ final class WhisperTests: XCTestCase {
         XCTAssertEqual(WhisperLanguage.summary(for: []), "Auto-detect (all)")
         XCTAssertEqual(WhisperLanguage.summary(for: ["de"]), "German")
         XCTAssertEqual(WhisperLanguage.summary(for: ["de", "en"]), "English, German")
+    }
+
+    /// Catalog-ordered labels, used to build the language-repair prompt hint.
+    func testLanguageLabels() {
+        XCTAssertEqual(WhisperLanguage.labels(for: ["de", "en"]), ["English", "German"])
+        XCTAssertEqual(WhisperLanguage.labels(for: []), [])
     }
 }
