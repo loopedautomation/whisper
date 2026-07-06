@@ -1,5 +1,15 @@
 # looped-whisper
 
+## 0.5.0
+
+### Minor Changes
+
+- 4dcd3d3: Add an opt-in "Fix cross-language mix-ups with AI" toggle (Settings → Model, shown once you select 2+ languages) that repairs words transcribed in the wrong language — e.g. mid-sentence switches between English and German — by sending the transcript to your configured Rewrite provider. Off by default so transcription stays fully local unless you turn it on. Not applied during realtime incremental typing.
+
+### Patch Changes
+
+- a46c31b: Fix a bug where a recording could decode to an empty transcript (silence, background noise, a very short or quiet clip) and still play the success sound with nothing typed and no warning shown. Empty decode results are now treated the same as "no speech detected" — same soft warning as recording with no audio at all — instead of silently completing as if delivery had succeeded.
+
 ## 0.4.0
 
 ### Minor Changes
