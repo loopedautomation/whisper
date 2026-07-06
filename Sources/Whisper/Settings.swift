@@ -15,7 +15,8 @@ enum PrefKey {
     static let rewriteModel = "rewriteModel"
     static let rewriteBaseURL = "rewriteBaseURL"          // for openaiCompatible
     static let rewritePrompt = "rewritePrompt"            // user prompt template, uses {{input}}
-    static let language = "language"                       // whisper language hint, "" = auto
+    static let language = "language"                       // legacy single-language hint, "" = auto
+    static let preferredLanguages = "preferredLanguages"   // comma-joined ISO codes; empty = auto-detect all
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
     static let soundVolume = "soundVolume"                // 0.0...1.0
@@ -49,6 +50,68 @@ enum RewriteProvider: String, CaseIterable, Identifiable {
     case anthropic, openaiCompatible
     var id: String { rawValue }
     var label: String { self == .anthropic ? "Anthropic (Claude)" : "OpenAI-compatible" }
+}
+
+/// A selectable transcription language. `code` is the ISO-639-1 hint passed to
+/// WhisperKit (empty string = auto-detect). All multilingual Whisper models
+/// support these; the list is a curated set of the most widely spoken languages
+/// and is trivial to extend — Whisper recognizes ~99 languages in total.
+struct WhisperLanguage: Identifiable, Hashable {
+    let code: String   // "" = auto-detect
+    let label: String
+    var id: String { code }
+
+    static let known: [WhisperLanguage] = [
+        .init(code: "",   label: "Auto-detect"),
+        .init(code: "en", label: "English"),
+        .init(code: "de", label: "German"),
+        .init(code: "es", label: "Spanish"),
+        .init(code: "fr", label: "French"),
+        .init(code: "it", label: "Italian"),
+        .init(code: "pt", label: "Portuguese"),
+        .init(code: "nl", label: "Dutch"),
+        .init(code: "ru", label: "Russian"),
+        .init(code: "pl", label: "Polish"),
+        .init(code: "uk", label: "Ukrainian"),
+        .init(code: "tr", label: "Turkish"),
+        .init(code: "ar", label: "Arabic"),
+        .init(code: "hi", label: "Hindi"),
+        .init(code: "zh", label: "Chinese"),
+        .init(code: "ja", label: "Japanese"),
+        .init(code: "ko", label: "Korean"),
+        .init(code: "sv", label: "Swedish"),
+        .init(code: "id", label: "Indonesian")
+    ]
+
+    /// Falls back to auto-detect for any stored code not in the list.
+    static func label(for code: String) -> String {
+        known.first { $0.code == code }?.label ?? "Auto-detect"
+    }
+
+    /// Decodes the comma-joined `preferredLanguages` pref into a set of codes.
+    static func codes(from stored: String) -> Set<String> {
+        Set(stored.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty })
+    }
+
+    /// Encodes a set of codes back into the stored comma-joined form. Order
+    /// follows `known` so the value is stable.
+    static func string(from codes: Set<String>) -> String {
+        known.map(\.code).filter { codes.contains($0) }.joined(separator: ",")
+    }
+
+    /// Human-readable summary for the picker label.
+    static func summary(for codes: Set<String>) -> String {
+        if codes.isEmpty { return "Auto-detect (all)" }
+        let labels = known.filter { codes.contains($0.code) }.map(\.label)
+        return labels.joined(separator: ", ")
+    }
+
+    /// The single language hint to hand the transcriber for a given selection:
+    /// exactly one selected → pin it; zero or many → "" (auto-detect).
+    static func hint(for codes: Set<String>) -> String {
+        codes.count == 1 ? (codes.first ?? "") : ""
+    }
 }
 
 /// Defaults applied on first launch.
@@ -87,6 +150,7 @@ enum DefaultPref {
             PrefKey.rewriteBaseURL: "https://api.openai.com/v1",
             PrefKey.rewritePrompt: DefaultPref.rewritePromptTemplate,
             PrefKey.language: "en",
+            PrefKey.preferredLanguages: "en",   // preserve today's English default; deselect for auto
             PrefKey.inputDeviceUID: ""   // follow system default
         ])
     }

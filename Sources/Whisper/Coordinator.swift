@@ -347,7 +347,12 @@ final class Coordinator: ObservableObject {
     }
 
     private func language() -> String {
-        UserDefaults.standard.string(forKey: PrefKey.language) ?? ""
+        // Exactly one preferred language → pin it; zero or several → "" so the
+        // model auto-detects the language of each recording.
+        let stored = UserDefaults.standard.string(forKey: PrefKey.preferredLanguages)
+            ?? UserDefaults.standard.string(forKey: PrefKey.language)   // migrate legacy pref
+            ?? ""
+        return WhisperLanguage.hint(for: WhisperLanguage.codes(from: stored))
     }
 
     private func rewriteConfig() -> RewriteService.Config? {

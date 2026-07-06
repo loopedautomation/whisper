@@ -146,16 +146,24 @@ private struct ModelTab: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var models: ModelManager
     @State private var selectedModel = d.string(forKey: PrefKey.selectedModel) ?? "base"
-    @State private var language = d.string(forKey: PrefKey.language) ?? "en"
+    @State private var languages = WhisperLanguage.codes(from: d.string(forKey: PrefKey.preferredLanguages) ?? "en")
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
         self.models = coordinator.models
     }
 
+    private var storedLanguages: Set<String> {
+        WhisperLanguage.codes(from: d.string(forKey: PrefKey.preferredLanguages) ?? "en")
+    }
+
     private var isDirty: Bool {
         selectedModel != d.string(forKey: PrefKey.selectedModel)
-        || language != d.string(forKey: PrefKey.language)
+        || languages != storedLanguages
+    }
+
+    private func toggle(_ code: String) {
+        if languages.contains(code) { languages.remove(code) } else { languages.insert(code) }
     }
 
     var body: some View {
@@ -167,9 +175,28 @@ private struct ModelTab: View {
                 }
                 .labelsHidden()
             }
-            HStack {
+            HStack(alignment: .top) {
                 Text("Language").frame(width: 110, alignment: .leading)
-                TextField("ISO code (e.g. en), blank = auto", text: $language).frame(maxWidth: 220)
+                VStack(alignment: .leading, spacing: 4) {
+                    Menu {
+                        // Multi-select: check every language you speak. The menu
+                        // stays open so you can pick several in one pass.
+                        ForEach(WhisperLanguage.known.filter { !$0.code.isEmpty }) { lang in
+                            Toggle(isOn: Binding(
+                                get: { languages.contains(lang.code) },
+                                set: { _ in toggle(lang.code) }
+                            )) { Text(lang.label) }
+                        }
+                    } label: {
+                        Text(WhisperLanguage.summary(for: languages))
+                    }
+                    .frame(maxWidth: 220)
+
+                    Text(languages.count == 1
+                         ? "Pinned — everything is transcribed as this language."
+                         : "Auto-detects the language of each recording.")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
             }
 
             Divider()
@@ -197,7 +224,7 @@ private struct ModelTab: View {
             .frame(maxHeight: .infinity)
 
             SaveBar(disabled: !isDirty) {
-                d.set(language, forKey: PrefKey.language)
+                d.set(WhisperLanguage.string(from: languages), forKey: PrefKey.preferredLanguages)
                 if selectedModel != d.string(forKey: PrefKey.selectedModel) {
                     d.set(selectedModel, forKey: PrefKey.selectedModel)
                     Task { await coordinator.loadModel(selectedModel) }
