@@ -5,14 +5,24 @@ import Carbon.HIToolbox
 /// synthesizing a Cmd+V keystroke. Requires Accessibility permission to post
 /// events into other applications.
 enum TextInserter {
+    /// Re-activates `app` if it isn't already frontmost, so a keystroke sent
+    /// right after reliably lands there instead of wherever focus drifted to
+    /// while transcription (and any optional detection/rewrite) was running.
+    private static func refocus(_ app: NSRunningApplication?) {
+        guard let app, !app.isTerminated, !app.isActive else { return }
+        app.activate()
+    }
+
     /// Copies `text` to the clipboard and pastes it at the cursor.
     /// If `restoreClipboard` is true, the prior clipboard contents are restored
-    /// after the paste completes.
-    static func insert(_ text: String, restoreClipboard: Bool) {
+    /// after the paste completes. `targetApp`, if given, is re-activated first.
+    static func insert(_ text: String, restoreClipboard: Bool, targetApp: NSRunningApplication? = nil) {
         let previous = restoreClipboard ? ClipboardService.currentString() : nil
         ClipboardService.set(text)
-        // Give the pasteboard a moment to settle before posting the paste.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+        refocus(targetApp)
+        // Give the pasteboard — and app activation, if it just happened — a
+        // moment to settle before posting the paste.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) {
             paste()
             if restoreClipboard {
                 DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
@@ -24,9 +34,11 @@ enum TextInserter {
 
     /// Types `text` at the cursor as synthesized Unicode keystrokes (no clipboard).
     /// Used for incremental/live insertion so we don't clobber the pasteboard
-    /// on every chunk. Requires Accessibility, like `paste()`.
-    static func typeString(_ text: String) {
+    /// on every chunk. Requires Accessibility, like `paste()`. `targetApp`, if
+    /// given, is re-activated first (a no-op when it's already frontmost).
+    static func typeString(_ text: String, targetApp: NSRunningApplication? = nil) {
         guard !text.isEmpty else { return }
+        refocus(targetApp)
         let source = CGEventSource(stateID: .combinedSessionState)
         // Chunk to stay well under the event's UniChar buffer limit.
         for chunk in text.chunked(into: 20) {

@@ -32,6 +32,13 @@ final class Coordinator: ObservableObject {
     // Language detected once per recording when several languages are selected
     // (restricted mode); pinned for the rest of the session.
     private var detectedLanguage: String?
+    // The app the user was dictating into, captured the moment recording
+    // starts. Re-activated right before every paste/type — transcription
+    // (and optional language detection / AI rewrite) can take long enough
+    // for focus to drift elsewhere before delivery, which otherwise sends
+    // the keystrokes to whatever happens to be frontmost at that later
+    // moment instead of the app the user was actually looking at.
+    private var targetApp: NSRunningApplication?
 
     init() {
         let state = AppState()
@@ -169,6 +176,13 @@ final class Coordinator: ObservableObject {
 
     func beginRecording(silent: Bool = false) {
         guard !state.isRecording else { return }
+        // Capture the dictation target before anything else — a permission
+        // prompt below, or our own menu/HUD, could otherwise become
+        // momentarily frontmost and get captured instead.
+        if let frontmost = NSWorkspace.shared.frontmostApplication,
+           frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
+            targetApp = frontmost
+        }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .denied, .restricted:
             // Permission was explicitly refused — the system prompt won't reappear,
@@ -295,7 +309,7 @@ final class Coordinator: ObservableObject {
         lastPollText = text
         guard stable.count > liveInsertedText.count, stable.hasPrefix(liveInsertedText) else { return }
         let delta = String(stable.dropFirst(liveInsertedText.count))
-        TextInserter.typeString(delta)
+        TextInserter.typeString(delta, targetApp: targetApp)
         liveInsertedText = stable
     }
 
@@ -324,7 +338,7 @@ final class Coordinator: ObservableObject {
                 } else {
                     remainder = String(raw.dropFirst(raw.commonPrefix(with: liveInsertedText).count))
                 }
-                TextInserter.typeString(remainder)
+                TextInserter.typeString(remainder, targetApp: targetApp)
                 state.lastTranscript = raw
                 SoundService.play(.done)
                 if case .error = state.status {} else { state.setStatus(.idle) }
@@ -394,7 +408,7 @@ final class Coordinator: ObservableObject {
                 return
             }
             let restore = UserDefaults.standard.bool(forKey: PrefKey.restoreClipboard)
-            TextInserter.insert(text, restoreClipboard: restore)
+            TextInserter.insert(text, restoreClipboard: restore, targetApp: targetApp)
         }
     }
 
