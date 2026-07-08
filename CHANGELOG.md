@@ -1,5 +1,12 @@
 # looped-whisper
 
+## 0.5.2
+
+### Patch Changes
+
+- e3adca2: Fix a confusing "stuck" experience after switching to a bigger model (or while a previous recording is still transcribing/cleaning up): starting a new recording during that window doesn't fail, it just silently queues behind the in-flight work, while the status line gets overwritten to "Recording…"/"Transcribing…" — hiding what's actually happening for as long as that takes (worst case: minutes, for a multi-GB model download). Starting a recording is now refused with a specific message ("Large v3 (turbo) is still loading", "Still transcribing the previous recording", etc.) instead of silently queuing.
+- 7737db2: Fix a bug in realtime dictation with 2+ languages selected: the final transcript could sometimes come back empty — no paste, no clipboard, no warning — even when live captions clearly showed real speech. The final decode was reusing a language guess made from only the first ~2 seconds of audio; a bad early guess could force the entire recording into the wrong language, degrading it all the way to nothing. The final decode now always detects fresh against the complete recording (as batch mode already did), and additionally retries once with free auto-detect if a detected-and-pinned language still decodes to nothing.
+
 ## 0.5.1
 
 ### Patch Changes
