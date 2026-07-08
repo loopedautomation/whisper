@@ -176,6 +176,25 @@ final class Coordinator: ObservableObject {
 
     func beginRecording(silent: Bool = false) {
         guard !state.isRecording else { return }
+        // TranscriptionService is an actor: starting a recording while it's
+        // still finishing a previous transcribe/rewrite pass — or still
+        // downloading/loading a newly-switched model — doesn't fail, it just
+        // silently queues behind that work. The status line then gets
+        // overwritten to "Recording…"/"Transcribing…", hiding what's actually
+        // still happening, so it can look stuck for as long as that takes
+        // (worst case: minutes, for a multi-GB model download). Refuse up
+        // front with a specific reason instead.
+        if state.isBusy {
+            let reason: String
+            switch state.status {
+            case .loadingModel(let label): reason = "\(label) is still loading"
+            case .transcribing: reason = "Still transcribing the previous recording"
+            case .rewriting: reason = "Still cleaning up the previous recording"
+            default: reason = "Still busy"
+            }
+            state.setError(AppError(reason, hint: "wait a moment and try again"))
+            return
+        }
         // Capture the dictation target before anything else — a permission
         // prompt below, or our own menu/HUD, could otherwise become
         // momentarily frontmost and get captured instead.
