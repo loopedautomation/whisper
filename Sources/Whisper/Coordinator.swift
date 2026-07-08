@@ -317,13 +317,19 @@ final class Coordinator: ObservableObject {
 
     private func finishPipeline(samples: [Float]) async {
         do {
-            // Reuse the language detected during realtime polling (same
-            // recording); otherwise restricted detection runs inside transcribe.
-            let selection: LanguageSelection =
-                detectedLanguage.map { .pinned($0) } ?? languageSelection()
+            // Always re-derive the selection fresh for the final decode — do
+            // NOT reuse `detectedLanguage` from realtime polling. That cache
+            // is only a rough guess from the first ~2s of audio (kept solely
+            // to avoid re-detecting on every poll and to stop live captions
+            // flip-flopping mid-recording); pinning the FINAL, complete-
+            // recording decode to an early guess risks forcing the whole
+            // transcript into the wrong language on a bad guess, which can
+            // degrade output all the way down to nothing. Letting transcribe()
+            // detect fresh here uses the full recording, same as batch mode
+            // already does, which is far more reliable than a 2s snapshot.
             let raw = try await transcription.transcribe(
                 samples: samples,
-                selection: selection,
+                selection: languageSelection(),
                 vocabulary: vocabulary.terms
             )
             state.liveConfirmed = raw

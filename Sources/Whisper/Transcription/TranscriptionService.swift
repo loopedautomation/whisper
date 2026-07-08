@@ -37,18 +37,45 @@ actor TranscriptionService {
         guard !samples.isEmpty else { throw TranscriptionError.empty }
 
         let language: String
+        let isOurGuess: Bool   // true only when *we* picked the language, not the user
         switch selection {
         case .auto:
             language = ""
+            isOurGuess = false
         case .pinned(let code):
             language = code
+            isOurGuess = false
         case .restricted(let candidates):
             // Detect first, then pin the best selected candidate. A detection
             // failure degrades to unrestricted auto-detect instead of failing
             // the whole run.
             language = (try? await detectLanguage(samples: samples, among: candidates)) ?? ""
+            isOurGuess = true
         }
 
+        let text = try await decode(samples, language: language, vocabulary: vocabulary, pipe: pipe)
+        if !text.isEmpty { return text }
+
+        // A pinned language can occasionally decode to nothing for audio that
+        // doesn't actually match it well (e.g. our own detection guessed
+        // wrong). Only retry when *we* picked the language — an explicit
+        // single-language selection is the user's deliberate choice and isn't
+        // second-guessed. One extra decode is cheap insurance against losing
+        // an entire recording to one bad guess.
+        if isOurGuess, !language.isEmpty {
+            let retryText = try await decode(samples, language: "", vocabulary: vocabulary, pipe: pipe)
+            guard !retryText.isEmpty else { throw TranscriptionError.empty }
+            return retryText
+        }
+        // A non-empty recording can still decode to nothing (silence, noise, a
+        // very short/quiet clip) — treat that the same as "no speech detected"
+        // rather than returning "" as if it were a successful transcript, which
+        // let the caller play the success chime and skip delivery with no
+        // visible warning at all.
+        throw TranscriptionError.empty
+    }
+
+    private func decode(_ samples: [Float], language: String, vocabulary: [String], pipe: WhisperKit) async throws -> String {
         var options = DecodingOptions()
         if !language.isEmpty {
             options.language = language
@@ -59,16 +86,8 @@ actor TranscriptionService {
             options.promptTokens = pipe.tokenizer?.encode(text: " " + prompt)
             options.usePrefillPrompt = true
         }
-
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
-        let text = results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
-        // A non-empty recording can still decode to nothing (silence, noise, a
-        // very short/quiet clip) — treat that the same as "no speech detected"
-        // rather than returning "" as if it were a successful transcript, which
-        // let the caller play the success chime and skip delivery with no
-        // visible warning at all.
-        guard !text.isEmpty else { throw TranscriptionError.empty }
-        return text
+        return results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Detects the spoken language and returns the best-scoring candidate
