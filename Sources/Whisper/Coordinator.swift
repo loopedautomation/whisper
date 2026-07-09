@@ -41,6 +41,9 @@ final class Coordinator: ObservableObject {
     private var targetApp: NSRunningApplication?
 
     init() {
+        // Install crash handlers as early as possible so we catch failures during
+        // the rest of startup too. Purely local; nothing is sent anywhere.
+        CrashReporter.install()
         let state = AppState()
         self.state = state
         permissions = PermissionsManager()
@@ -63,6 +66,7 @@ final class Coordinator: ObservableObject {
         configureFnMonitor()
         preloadModelInBackground()
         checkForUpdatesInBackground()
+        state.hasPendingCrashLogs = CrashReporter.hasPendingLogs()
     }
 
     // MARK: - updates
@@ -105,6 +109,49 @@ final class Coordinator: ObservableObject {
         if alert.runModal() == .alertSecondButtonReturn {
             updateChecker.openDownloadPage()
         }
+    }
+
+    // MARK: - crash reports
+
+    /// Presents an alert offering to inspect, report, or dismiss crash logs that
+    /// were captured on a previous run. The user is in full control of sharing.
+    func presentPendingCrashReports() {
+        let count = CrashReporter.pendingLogs().count
+        guard count > 0 else { return }
+
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = count == 1
+            ? "Looped Whisper crashed on a previous run"
+            : "Looped Whisper crashed \(count) times on previous runs"
+        alert.informativeText = """
+        A local crash log was saved on your machine. Nothing has been sent anywhere — \
+        you decide whether to share it. You can view the log, copy it, or open a \
+        prefilled GitHub issue to help us fix it.
+
+        macOS also keeps more detailed reports in ~/Library/Logs/DiagnosticReports.
+        """
+        alert.addButton(withTitle: "Report on GitHub…")
+        alert.addButton(withTitle: "Copy Log")
+        alert.addButton(withTitle: "Show in Finder")
+        alert.addButton(withTitle: "Dismiss")
+
+        switch alert.runModal() {
+        case .alertFirstButtonReturn:
+            if let url = CrashReporter.githubIssueURL() { NSWorkspace.shared.open(url) }
+            dismissCrashReports()
+        case .alertSecondButtonReturn:
+            if let log = CrashReporter.mostRecentLogContents() { ClipboardService.set(log) }
+        case .alertThirdButtonReturn:
+            CrashReporter.revealInFinder()
+        default:
+            dismissCrashReports()
+        }
+    }
+
+    func dismissCrashReports() {
+        CrashReporter.clearLogs()
+        state.hasPendingCrashLogs = false
     }
 
     // MARK: - fn key

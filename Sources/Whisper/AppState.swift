@@ -68,6 +68,9 @@ final class AppState: ObservableObject {
     /// Continuously-updated angle for the menu bar spinner (driven by a timer so
     /// it actually animates in the status bar, where SwiftUI animations don't tick).
     @Published var spinnerAngle: Double = 0
+    /// True when the app captured one or more crash logs on a previous run that
+    /// the user hasn't dismissed yet. Surfaced in the menu bar.
+    @Published var hasPendingCrashLogs: Bool = false
 
     private var spinTimer: Timer?
     private var errorClearWorkItem: DispatchWorkItem?
