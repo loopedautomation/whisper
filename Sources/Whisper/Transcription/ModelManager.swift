@@ -1,14 +1,24 @@
 import Foundation
 import AppKit
 import WhisperKit
+import ParakeetASR
 
-/// Catalog of the open Whisper models WhisperKit can fetch from the
-/// `argmaxinc/whisperkit-coreml` Hugging Face repo. This is the "bring your own
-/// model" surface — the user picks one and it is downloaded + cached on first use.
+/// Which library runs a given model. WhisperKit serves the openai/whisper
+/// family; speech-swift serves additional architectures (currently Parakeet).
+enum TranscriptionEngine: String, Hashable {
+    case whisperKit
+    case parakeet
+}
+
+/// Catalog of the models the app can fetch. WhisperKit models come from the
+/// `argmaxinc/whisperkit-coreml` Hugging Face repo; Parakeet from its own
+/// CoreML repo via speech-swift. This is the "bring your own model" surface —
+/// the user picks one and it is downloaded + cached on first use.
 struct WhisperModel: Identifiable, Hashable {
-    let id: String      // WhisperKit model identifier
+    let id: String      // engine-specific model identifier
     let label: String   // human label
     let note: String    // size / speed hint
+    var engine: TranscriptionEngine = .whisperKit
 
     static let known: [WhisperModel] = [
         .init(id: "tiny",   label: "Tiny",   note: "~75 MB · fastest, least accurate"),
@@ -16,28 +26,44 @@ struct WhisperModel: Identifiable, Hashable {
         .init(id: "small",  label: "Small",  note: "~470 MB · balanced"),
         .init(id: "medium", label: "Medium", note: "~1.5 GB · accurate, slower"),
         .init(id: "large-v3", label: "Large v3", note: "~3 GB · most accurate"),
-        .init(id: "large-v3-v20240930", label: "Large v3 (turbo)", note: "~1.5 GB · fast + accurate")
+        .init(id: "large-v3-v20240930", label: "Large v3 (turbo)", note: "~1.5 GB · fast + accurate"),
+        .init(id: ModelStorage.parakeetRepo, label: "Parakeet v3",
+              note: "~600 MB · 25 European languages, fast · auto-detects language",
+              engine: .parakeet)
     ]
 
     static func label(for id: String) -> String {
         known.first(where: { $0.id == id })?.label ?? id
     }
+
+    static func engine(for id: String) -> TranscriptionEngine {
+        known.first(where: { $0.id == id })?.engine ?? .whisperKit
+    }
 }
 
 /// Single source of truth for where models live on disk. WhisperKit downloads
-/// into `<base>/models/<repo>/openai_whisper-<variant>` via HubApi.
+/// into `<base>/models/<repo>/openai_whisper-<variant>` via HubApi; Parakeet
+/// into `<base>/models/<repo>` via speech-swift's `cacheDir` override.
 enum ModelStorage {
     static let repo = "argmaxinc/whisperkit-coreml"
+    static let parakeetRepo = "aufklarer/Parakeet-TDT-v3-CoreML-INT8-30s"
 
     /// Root we hand to WhisperKit as `downloadBase`. Shared between release and
     /// dev builds so models aren't downloaded twice.
     static let baseURL: URL = AppPaths.sharedModels
 
     static func folder(for modelID: String) -> URL {
-        baseURL
-            .appendingPathComponent("models", isDirectory: true)
-            .appendingPathComponent(repo, isDirectory: true)
-            .appendingPathComponent("openai_whisper-\(modelID)", isDirectory: true)
+        switch WhisperModel.engine(for: modelID) {
+        case .whisperKit:
+            return baseURL
+                .appendingPathComponent("models", isDirectory: true)
+                .appendingPathComponent(repo, isDirectory: true)
+                .appendingPathComponent("openai_whisper-\(modelID)", isDirectory: true)
+        case .parakeet:
+            return baseURL
+                .appendingPathComponent("models", isDirectory: true)
+                .appendingPathComponent(modelID, isDirectory: true)
+        }
     }
 }
 
@@ -126,18 +152,36 @@ final class ModelManager: ObservableObject {
         defer { downloadTasks[id] = nil }
         do {
             try Task.checkCancellation()
-            _ = try await WhisperKit.download(
-                variant: id,
-                downloadBase: ModelStorage.baseURL,
-                from: ModelStorage.repo,
-                progressCallback: { progress in
-                    Task { @MainActor in
-                        if case .downloading = self.states[id] {
-                            self.states[id] = .downloading(progress.fractionCompleted)
+            switch WhisperModel.engine(for: id) {
+            case .whisperKit:
+                _ = try await WhisperKit.download(
+                    variant: id,
+                    downloadBase: ModelStorage.baseURL,
+                    from: ModelStorage.repo,
+                    progressCallback: { progress in
+                        Task { @MainActor in
+                            if case .downloading = self.states[id] {
+                                self.states[id] = .downloading(progress.fractionCompleted)
+                            }
                         }
                     }
-                }
-            )
+                )
+            case .parakeet:
+                // fromPretrained both downloads and loads; here we only care
+                // about the download side — the loaded instance is discarded
+                // and TranscriptionService loads its own from the same cache.
+                _ = try await ParakeetASRModel.fromPretrained(
+                    modelId: id,
+                    cacheDir: ModelStorage.folder(for: id),
+                    progressHandler: { fraction, _ in
+                        Task { @MainActor in
+                            if case .downloading = self.states[id] {
+                                self.states[id] = .downloading(fraction)
+                            }
+                        }
+                    }
+                )
+            }
             try Task.checkCancellation()
             states[id] = .downloaded
             return true
