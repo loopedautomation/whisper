@@ -201,6 +201,11 @@ final class Coordinator: ObservableObject {
         if let frontmost = NSWorkspace.shared.frontmostApplication,
            frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
             targetApp = frontmost
+        } else if targetApp?.isTerminated != false {
+            // Don't hold on to a target from a previous session that has since
+            // quit — refocusing it would silently fail and the paste would go
+            // to whatever happens to be frontmost.
+            targetApp = nil
         }
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .denied, .restricted:
@@ -327,6 +332,10 @@ final class Coordinator: ObservableObject {
         let stable = String(text.commonPrefix(with: lastPollText))
         lastPollText = text
         guard stable.count > liveInsertedText.count, stable.hasPrefix(liveInsertedText) else { return }
+        // If nothing has keyboard focus right now, don't type — and don't mark
+        // the delta as inserted, so it's retried on a later poll (or delivered
+        // with the final remainder) instead of being lost.
+        guard FocusInspector.focusStatus() != .noFocus else { return }
         let delta = String(stable.dropFirst(liveInsertedText.count))
         TextInserter.typeString(delta, targetApp: targetApp)
         liveInsertedText = stable
@@ -363,7 +372,17 @@ final class Coordinator: ObservableObject {
                 } else {
                     remainder = String(raw.dropFirst(raw.commonPrefix(with: liveInsertedText).count))
                 }
-                TextInserter.typeString(remainder, targetApp: targetApp)
+                if !remainder.isEmpty && FocusInspector.focusStatus() == .noFocus {
+                    // Nowhere for the keystrokes to land — put the full
+                    // transcript on the clipboard rather than typing into
+                    // the void, so nothing is lost.
+                    ClipboardService.set(raw)
+                    state.setError(AppError(
+                        "Nothing was focused to type into (copied to clipboard instead)",
+                        hint: "click where you want the text and press ⌘V"))
+                } else {
+                    TextInserter.typeString(remainder, targetApp: targetApp)
+                }
                 state.lastTranscript = raw
                 SoundService.play(.done)
                 if case .error = state.status {} else { state.setStatus(.idle) }
@@ -433,7 +452,14 @@ final class Coordinator: ObservableObject {
                 return
             }
             let restore = UserDefaults.standard.bool(forKey: PrefKey.restoreClipboard)
-            TextInserter.insert(text, restoreClipboard: restore, targetApp: targetApp)
+            TextInserter.insert(text, restoreClipboard: restore, targetApp: targetApp) { [weak self] result in
+                Task { @MainActor in
+                    guard result == .copiedOnly else { return }
+                    self?.state.setError(AppError(
+                        "Nothing was focused to paste into (copied to clipboard instead)",
+                        hint: "click where you want the text and press ⌘V"))
+                }
+            }
         }
     }
 
