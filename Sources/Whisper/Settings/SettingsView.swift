@@ -186,6 +186,11 @@ private struct ModelTab: View {
                 }
                 .labelsHidden()
             }
+            if WhisperModel.engine(for: selectedModel) == .parakeet {
+                Text("Parakeet detects the spoken language automatically (25 European languages, including mixed speech) — the language selection and custom vocabulary below don't apply to it.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack(alignment: .top) {
                 Text("Language").frame(width: 110, alignment: .leading)
                 VStack(alignment: .leading, spacing: 4) {
