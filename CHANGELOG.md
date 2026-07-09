@@ -1,5 +1,11 @@
 # looped-whisper
 
+## 0.6.0
+
+### Minor Changes
+
+- 6d0bac9: Capture crashes locally (uncaught exceptions and signals) and surface them on the next launch so they can be reviewed and reported. Privacy-respecting: crash logs stay on your machine and nothing is sent anywhere without your consent.
+
 ## 0.5.2
 
 ### Patch Changes
