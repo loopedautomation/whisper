@@ -4,6 +4,8 @@
 
 ### Minor Changes
 
+- 02a6e20: Add voice quick actions: spoken commands can trigger actions instead of pasting text — open URLs (including incognito), launch or quit apps, and run Siri Shortcuts. Trigger phrases are matched on-device, with optional AI intent detection via your Rewrite provider for paraphrased commands. Hold a configurable modifier (default ⌘) as recording starts to switch into action mode; without it, everything pastes as normal dictation. Configure in Settings → Actions (off by default).
+- f676eed: Add Parakeet TDT v3 (via speech-swift) as an additional transcription engine alongside WhisperKit.
 - 6d0bac9: Capture crashes locally (uncaught exceptions and signals) and surface them on the next launch so they can be reviewed and reported. Privacy-respecting: crash logs stay on your machine and nothing is sent anywhere without your consent.
 
 ## 0.5.2
