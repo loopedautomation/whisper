@@ -32,6 +32,7 @@ final class Coordinator: ObservableObject {
     // Language detected once per recording when several languages are selected
     // (restricted mode); pinned for the rest of the session.
     private var detectedLanguage: String?
+    private var languageRechecked = false
     // The app the user was dictating into, captured the moment recording
     // starts. Re-activated right before every paste/type — transcription
     // (and optional language detection / AI rewrite) can take long enough
@@ -283,6 +284,7 @@ final class Coordinator: ObservableObject {
             liveInsertedText = ""
             lastPollText = ""
             detectedLanguage = nil
+            languageRechecked = false
             incrementalActive = currentMode() == .realtime
                 && currentInsertion() == .incremental
                 && permissions.accessibilityTrusted
@@ -545,13 +547,29 @@ final class Coordinator: ObservableObject {
     /// Language policy for a realtime pass. Polling re-transcribes the whole
     /// buffer every ~1.5 s, and re-detecting on each pass could flip the
     /// language mid-recording and corrupt incremental insertion — so in
-    /// restricted mode the language is detected once (after ~2 s of audio,
-    /// enough to trust the result) and pinned for the rest of the recording.
+    /// restricted mode the language is detected once (after ~2 s of audio)
+    /// and pinned. A 2 s guess is fragile for bilingual speakers (an opening
+    /// loanword or filler can pin the wrong language for the whole recording),
+    /// so the guess is re-verified exactly once against the fuller buffer at
+    /// ~6 s and corrected if it disagrees. Incremental insertion tolerates the
+    /// one-time flip: the confirmed-prefix logic simply stops extending until
+    /// the new decode overtakes what was already typed.
     private func realtimeSelection(snapshot: [Float]) async -> LanguageSelection {
         let selection = languageSelection()
         guard case .restricted(let candidates) = selection else { return selection }
-        if let cached = detectedLanguage { return .pinned(cached) }
-        guard snapshot.count >= Int(AudioRecorder.targetSampleRate) * 2 else { return .auto }
+        let rate = Int(AudioRecorder.targetSampleRate)
+        if let cached = detectedLanguage {
+            if !languageRechecked && snapshot.count >= rate * 6 {
+                languageRechecked = true
+                if let rechecked = try? await transcription.detectLanguage(samples: snapshot, among: candidates),
+                   !rechecked.isEmpty {
+                    detectedLanguage = rechecked
+                    return .pinned(rechecked)
+                }
+            }
+            return .pinned(cached)
+        }
+        guard snapshot.count >= rate * 2 else { return .auto }
         guard let detected = try? await transcription.detectLanguage(samples: snapshot, among: candidates),
               !detected.isEmpty else { return .auto }
         detectedLanguage = detected
