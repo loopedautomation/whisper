@@ -65,14 +65,10 @@ final class AppState: ObservableObject {
     /// User-facing error surfaced in the menu bar dropdown. Cleared on the next
     /// successful action (or automatically after a short delay).
     @Published var lastError: AppError?
-    /// Continuously-updated angle for the menu bar spinner (driven by a timer so
-    /// it actually animates in the status bar, where SwiftUI animations don't tick).
-    @Published var spinnerAngle: Double = 0
     /// True when the app captured one or more crash logs on a previous run that
     /// the user hasn't dismissed yet. Surfaced in the menu bar.
     @Published var hasPendingCrashLogs: Bool = false
 
-    private var spinTimer: Timer?
     private var errorClearWorkItem: DispatchWorkItem?
 
     var isRecording: Bool {
@@ -89,7 +85,6 @@ final class AppState: ObservableObject {
 
     func setStatus(_ s: AppStatus) {
         status = s
-        updateSpinner()
     }
 
     /// Surfaces a user-visible error: sets the menu-bar status, the dropdown
@@ -116,22 +111,6 @@ final class AppState: ObservableObject {
         }
         errorClearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
-    }
-
-    private func updateSpinner() {
-        if isBusy {
-            guard spinTimer == nil else { return }
-            spinTimer = Timer.scheduledTimer(withTimeInterval: 0.05, repeats: true) { [weak self] _ in
-                Task { @MainActor in
-                    guard let self else { return }
-                    self.spinnerAngle = (self.spinnerAngle + 18).truncatingRemainder(dividingBy: 360)
-                }
-            }
-        } else {
-            spinTimer?.invalidate()
-            spinTimer = nil
-            spinnerAngle = 0
-        }
     }
 
     func clearLive() {
