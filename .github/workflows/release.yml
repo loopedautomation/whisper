@@ -160,6 +160,10 @@ jobs:
             desc "Local voice transcription for macOS — on-device Whisper models"
             homepage "https://github.com/loopedautomation/whisper"
 
+            # The app updates itself in place (in-app "Restart to Update"),
+            # so tell Homebrew not to treat version drift as outdated.
+            auto_updates true
+
             depends_on macos: :sonoma
             depends_on arch: :arm64
 

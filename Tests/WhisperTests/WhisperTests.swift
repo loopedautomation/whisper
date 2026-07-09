@@ -78,4 +78,43 @@ final class WhisperTests: XCTestCase {
         XCTAssertEqual(WhisperLanguage.labels(for: ["de", "en"]), ["English", "German"])
         XCTAssertEqual(WhisperLanguage.labels(for: []), [])
     }
+
+    /// Release tags may carry a leading "v"; comparison is numeric per component.
+    @MainActor
+    func testUpdateVersionComparison() {
+        XCTAssertEqual(UpdateChecker.normalize("v0.6.2"), "0.6.2")
+        XCTAssertTrue(UpdateChecker.isNewer("0.10.0", than: "0.9.0"))
+        XCTAssertFalse(UpdateChecker.isNewer("0.6.2", than: "0.6.2"))
+        XCTAssertTrue(UpdateChecker.isNewer("1.0", than: "0.9.9"))
+    }
+
+    /// The updater must pick the app zip for the offered version — never a DMG
+    /// or an unrelated asset — and tolerate oddly named fallbacks.
+    @MainActor
+    func testUpdatePreferredZipAsset() {
+        let assets = ["LoopedWhisper-0.7.0.dmg", "LoopedWhisper-0.7.0.zip", "source.zip"]
+        XCTAssertEqual(UpdateChecker.preferredZipAsset(named: assets, version: "0.7.0"),
+                       "LoopedWhisper-0.7.0.zip")
+        // Exact version missing → any LoopedWhisper zip is acceptable.
+        XCTAssertEqual(UpdateChecker.preferredZipAsset(named: ["LoopedWhisper.zip", "notes.txt"],
+                                                       version: "0.7.0"),
+                       "LoopedWhisper.zip")
+        // No zip at all → nil (falls back to the releases page).
+        XCTAssertNil(UpdateChecker.preferredZipAsset(named: ["LoopedWhisper-0.7.0.dmg"],
+                                                     version: "0.7.0"))
+        XCTAssertNil(UpdateChecker.preferredZipAsset(named: [], version: "0.7.0"))
+    }
+
+    /// Gatekeeper-translocated paths must never be updated in place.
+    func testUpdateInstallerTranslocationDetection() {
+        XCTAssertTrue(UpdateInstaller.isTranslocated(
+            URL(fileURLWithPath: "/private/var/folders/x/AppTranslocation/ABC/d/LoopedWhisper.app")))
+        XCTAssertFalse(UpdateInstaller.isTranslocated(
+            URL(fileURLWithPath: "/Applications/LoopedWhisper.app")))
+    }
+
+    /// Test binaries are not .app bundles and must refuse self-update.
+    func testUpdateInstallerRefusesNonAppBundle() {
+        XCTAssertFalse(UpdateInstaller.canSelfUpdate(bundleURL: URL(fileURLWithPath: "/usr/bin")))
+    }
 }
