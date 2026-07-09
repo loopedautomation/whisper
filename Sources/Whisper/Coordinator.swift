@@ -96,7 +96,7 @@ final class Coordinator: ObservableObject {
                 presentUpToDateAlert()
             case .failed:
                 presentUpdateCheckFailedAlert()
-            case .updateAvailable, .checking, .idle:
+            case .updateAvailable, .downloading, .readyToInstall, .installing, .checking, .idle:
                 break   // surfaced inline in the menu / About tab
             }
         }

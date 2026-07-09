@@ -840,6 +840,23 @@ private struct AboutTab: View {
                 Label("Update available: \(v) — Download", systemImage: "arrow.down.circle.fill")
             }
             .buttonStyle(.borderedProminent)
+        case .downloading(let v):
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Downloading update \(v)…").font(.caption).foregroundStyle(.secondary)
+            }
+        case .readyToInstall(let v):
+            Button {
+                updates.installAndRelaunch()
+            } label: {
+                Label("Restart to update to \(v)", systemImage: "arrow.triangle.2.circlepath.circle.fill")
+            }
+            .buttonStyle(.borderedProminent)
+        case .installing:
+            HStack(spacing: 6) {
+                ProgressView().controlSize(.small)
+                Text("Installing update…").font(.caption).foregroundStyle(.secondary)
+            }
         case .upToDate:
             Text("You're up to date.").font(.caption).foregroundStyle(.secondary)
         case .failed:

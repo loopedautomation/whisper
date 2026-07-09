@@ -83,10 +83,21 @@ struct MenuBarContent: View {
 
         Divider()
 
-        if case .updateAvailable(let version, _) = updates.state {
+        switch updates.state {
+        case .updateAvailable(let version, _):
             Button("⬆︎ Update Available (\(version))") {
                 updates.openDownloadPage()
             }
+        case .downloading(let version):
+            Text("⬇︎ Downloading Update (\(version))…")
+        case .readyToInstall(let version):
+            Button("⟳ Restart to Update (\(version))") {
+                updates.installAndRelaunch()
+            }
+        case .installing:
+            Text("Installing Update…")
+        case .idle, .checking, .upToDate, .failed:
+            EmptyView()
         }
 
         Button("Check for Updates…") {
