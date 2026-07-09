@@ -8,8 +8,7 @@ struct LiveCaptionView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 6) {
-                Image(systemName: state.status.symbolName)
-                    .rotationEffect(.degrees(state.isBusy ? state.spinnerAngle : 0))
+                StatusGlyph(symbolName: state.status.symbolName, spinning: state.isBusy)
                 Text(state.status.menuLabel)
                     .font(.caption).foregroundStyle(.secondary)
             }
@@ -26,6 +25,35 @@ struct LiveCaptionView: View {
         .padding(14)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .modifier(GlassPanelBackground())
+    }
+}
+
+/// Status symbol that spins while busy. The rotation is a local repeating
+/// SwiftUI animation — no published state churn, so other AppState observers
+/// (like the menu bar label) don't re-render on every frame.
+private struct StatusGlyph: View {
+    let symbolName: String
+    let spinning: Bool
+    @State private var angle = 0.0
+
+    var body: some View {
+        Image(systemName: symbolName)
+            .rotationEffect(.degrees(angle))
+            .onAppear { if spinning { spin() } }
+            .onChange(of: spinning) { _, now in
+                if now {
+                    spin()
+                } else {
+                    var t = Transaction()
+                    t.disablesAnimations = true
+                    withTransaction(t) { angle = 0 }
+                }
+            }
+    }
+
+    private func spin() {
+        angle = 0
+        withAnimation(.linear(duration: 1.2).repeatForever(autoreverses: false)) { angle = 360 }
     }
 }
 

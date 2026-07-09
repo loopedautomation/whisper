@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 
 /// Keys for `@AppStorage` / `UserDefaults`-backed preferences.
 enum PrefKey {
@@ -21,6 +22,37 @@ enum PrefKey {
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
     static let soundVolume = "soundVolume"                // 0.0...1.0
+    static let quickActionsEnabled = "quickActionsEnabled"        // opt-in voice quick actions
+    static let quickActionsLLMFallback = "quickActionsLLMFallback" // opt-in: AI intent detection when no trigger matches (sends transcript to your Rewrite provider)
+    static let quickActionsModifier = "quickActionsModifier"      // modifier held at recording start to arm quick actions; "none" = always armed
+}
+
+/// Modifier key that must be held when recording starts for quick actions to
+/// be considered — so ordinary dictation can never accidentally trigger an
+/// action. Works with any recording shortcut, including fn/Globe (e.g. 🌐+⌘).
+enum QuickActionModifier: String, CaseIterable, Identifiable {
+    case none, command, option, control, shift
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .none: return "Always active"
+        case .command: return "⌘ Command"
+        case .option: return "⌥ Option"
+        case .control: return "⌃ Control"
+        case .shift: return "⇧ Shift"
+        }
+    }
+
+    var flags: NSEvent.ModifierFlags {
+        switch self {
+        case .none: return []
+        case .command: return .command
+        case .option: return .option
+        case .control: return .control
+        case .shift: return .shift
+        }
+    }
 }
 
 enum TranscriptionMode: String, CaseIterable, Identifiable {
@@ -51,6 +83,9 @@ enum RewriteProvider: String, CaseIterable, Identifiable {
     case anthropic, openaiCompatible
     var id: String { rawValue }
     var label: String { self == .anthropic ? "Anthropic (Claude)" : "OpenAI-compatible" }
+    /// Sensible default model per provider — fast, low-cost tiers suited to
+    /// transcript cleanup.
+    var defaultModel: String { self == .anthropic ? "claude-haiku-4-5-20251001" : "gpt-5.4-mini" }
 }
 
 /// A selectable transcription language. `code` is the ISO-639-1 hint passed to
@@ -175,7 +210,10 @@ enum DefaultPref {
             PrefKey.rewritePrompt: DefaultPref.rewritePromptTemplate,
             PrefKey.language: "en",
             PrefKey.preferredLanguages: "en",   // preserve today's English default; deselect for auto
-            PrefKey.inputDeviceUID: ""   // follow system default
+            PrefKey.inputDeviceUID: "",   // follow system default
+            PrefKey.quickActionsEnabled: false,
+            PrefKey.quickActionsLLMFallback: false,
+            PrefKey.quickActionsModifier: QuickActionModifier.command.rawValue
         ])
     }
 }

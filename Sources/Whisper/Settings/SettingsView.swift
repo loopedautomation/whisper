@@ -20,6 +20,8 @@ struct SettingsView: View {
                 .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
             RewriteTab()
                 .tabItem { Label("Rewrite", systemImage: "wand.and.stars") }
+            ActionsTab(store: coordinator.quickActions)
+                .tabItem { Label("Actions", systemImage: "bolt") }
             PermissionsTab(permissions: coordinator.permissions)
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
             AboutTab(coordinator: coordinator)
@@ -541,6 +543,14 @@ private struct RewriteTab: View {
                 SecureField("API key (stored in Keychain)", text: $apiKey)
             }
             .frame(height: provider == RewriteProvider.openaiCompatible.rawValue ? 150 : 122)
+            .onChange(of: provider) { old, new in
+                // Switching providers swaps in that provider's default model,
+                // unless the user has typed a custom one.
+                guard let oldProvider = RewriteProvider(rawValue: old),
+                      let newProvider = RewriteProvider(rawValue: new),
+                      model == oldProvider.defaultModel || model.isEmpty else { return }
+                model = newProvider.defaultModel
+            }
 
             Text("User prompt — `{{input}}` is replaced with the transcript. Vocabulary and guardrails are added automatically via the system prompt.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
@@ -561,6 +571,181 @@ private struct RewriteTab: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear { apiKey = storedKey }
+    }
+}
+
+// MARK: - Actions (voice quick actions)
+
+private struct ActionsTab: View {
+    @ObservedObject var store: QuickActionStore
+    @State private var enabled = d.bool(forKey: PrefKey.quickActionsEnabled)
+    @State private var llmFallback = d.bool(forKey: PrefKey.quickActionsLLMFallback)
+    @State private var modifier = d.string(forKey: PrefKey.quickActionsModifier) ?? QuickActionModifier.command.rawValue
+    @State private var editing: QuickAction?
+    @State private var creating = false
+    @State private var testResult: (id: UUID, ok: Bool, message: String)?
+
+    /// Runs the action as if its trigger had been spoken; `{{query}}` targets
+    /// get a sample query. Shows a transient pass/fail badge on the row.
+    private func test(_ action: QuickAction) {
+        let query = action.target.contains("{{query}}") ? "test" : nil
+        switch QuickActionExecutor.execute(action, query: query) {
+        case .success:
+            testResult = (action.id, true, "Action ran")
+        case .failure(let err):
+            testResult = (action.id, false, [err.message, err.hint].compactMap { $0 }.joined(separator: " — "))
+        }
+        let shown = action.id
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4) {
+            if testResult?.id == shown { testResult = nil }
+        }
+    }
+
+    private var hasAPIKey: Bool {
+        !(Keychain.get(account: RewriteService.keychainAccount) ?? "").isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Toggle("Enable voice quick actions", isOn: Binding(
+                get: { enabled },
+                set: { enabled = $0; d.set($0, forKey: PrefKey.quickActionsEnabled) }))
+            Text("When a recording starts with one of your trigger phrases, the action runs instead of pasting text. Anything else is pasted as usual. Use {{query}} in a target to capture what you say after the trigger.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Text("Hold to activate")
+                Picker("", selection: Binding(
+                    get: { modifier },
+                    set: { modifier = $0; d.set($0, forKey: PrefKey.quickActionsModifier) })) {
+                    ForEach(QuickActionModifier.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .labelsHidden().frame(width: 160)
+            }
+            .disabled(!enabled)
+            Text(modifier == QuickActionModifier.none.rawValue
+                 ? "Every recording is checked for quick actions."
+                 : "Quick actions run only when this key is already held as recording starts (e.g. \(QuickActionModifier(rawValue: modifier)?.label.prefix(1) ?? "") then 🌐). Recordings without it always paste as dictation. Note: this works with the fn/Globe key — a standard shortcut won't fire with an extra modifier held, so pick “Always active” if you only use standard shortcuts.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            Toggle("Use AI to detect intent when no trigger matches", isOn: Binding(
+                get: { llmFallback },
+                set: { llmFallback = $0; d.set($0, forKey: PrefKey.quickActionsLLMFallback) }))
+                .disabled(!enabled || !hasAPIKey)
+            Text(hasAPIKey
+                 ? "Sends short transcripts to your Rewrite provider to recognize paraphrased commands like “could you pull up github”."
+                 : "Requires an API key — configure one in the Rewrite tab.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            List {
+                ForEach(store.actions) { action in
+                    HStack(spacing: 10) {
+                        Toggle("", isOn: Binding(
+                            get: { action.enabled },
+                            set: { store.setEnabled(action, $0) }))
+                            .toggleStyle(.checkbox).labelsHidden()
+                        Image(systemName: action.kind.symbolName)
+                            .foregroundStyle(.secondary).frame(width: 18)
+                        VStack(alignment: .leading, spacing: 1) {
+                            Text(action.name).fontWeight(.medium)
+                            Text("“\(action.triggers.joined(separator: "”, “"))” → \(action.target)")
+                                .font(.caption).foregroundStyle(.secondary)
+                                .lineLimit(1).truncationMode(.middle)
+                        }
+                        Spacer()
+                        if testResult?.id == action.id {
+                            Image(systemName: testResult!.ok ? "checkmark.circle.fill" : "xmark.circle.fill")
+                                .foregroundStyle(testResult!.ok ? BrandColor.success : BrandColor.error)
+                                .help(testResult!.message)
+                        }
+                        Button { test(action) } label: { Image(systemName: "play.circle") }
+                            .buttonStyle(.borderless).help("Test this action now")
+                        Button { editing = action } label: { Image(systemName: "pencil") }
+                            .buttonStyle(.borderless).help("Edit")
+                        Button(role: .destructive) { store.remove(action) } label: { Image(systemName: "trash") }
+                            .buttonStyle(.borderless)
+                    }
+                }
+            }
+            .disabled(!enabled)
+
+            HStack(spacing: 8) {
+                Button("Add Action…") { creating = true }
+                Spacer()
+                Image(systemName: "doc.text")
+                Text(store.fileURL.path)
+                    .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                    .help(store.fileURL.path)
+                Button("Reload") { store.reload() }
+                Button("Reveal") { store.revealInFinder() }
+            }
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onAppear { store.reload() }
+        .sheet(item: $editing) { action in
+            QuickActionEditor(action: action) { store.update($0) }
+        }
+        .sheet(isPresented: $creating) {
+            QuickActionEditor(action: QuickAction(name: "", triggers: [], kind: .openURL, target: "")) {
+                store.add($0)
+            }
+        }
+    }
+}
+
+private struct QuickActionEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let onSave: (QuickAction) -> Void
+
+    @State private var action: QuickAction
+    @State private var triggersText: String
+
+    init(action: QuickAction, onSave: @escaping (QuickAction) -> Void) {
+        self.onSave = onSave
+        _action = State(initialValue: action)
+        _triggersText = State(initialValue: action.triggers.joined(separator: ", "))
+    }
+
+    private var parsedTriggers: [String] {
+        triggersText.split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    private var valid: Bool {
+        !action.name.trimmingCharacters(in: .whitespaces).isEmpty
+        && !parsedTriggers.isEmpty
+        && !action.target.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(action.name.isEmpty ? "New Action" : "Edit Action").font(.headline)
+            Form {
+                TextField("Name", text: $action.name, prompt: Text("Open GitHub"))
+                TextField("Triggers", text: $triggersText, prompt: Text("take me to github, open github"))
+                Picker("Action", selection: $action.kind) {
+                    ForEach(QuickActionKind.allCases) { Text($0.label).tag($0) }
+                }
+                TextField("Target", text: $action.target, prompt: Text(action.kind.targetHint))
+                    .font(.body.monospaced())
+            }
+            Text("Triggers are comma-separated spoken phrases. A trigger can also be a prefix — “search for cats” fills {{query}} with “cats”.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            HStack {
+                Spacer()
+                Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
+                Button("Save") {
+                    action.triggers = parsedTriggers
+                    onSave(action)
+                    dismiss()
+                }
+                .keyboardShortcut(.defaultAction)
+                .disabled(!valid)
+            }
+        }
+        .padding(20)
+        .frame(width: 440)
     }
 }
 

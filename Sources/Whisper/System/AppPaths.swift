@@ -37,4 +37,6 @@ enum AppPaths {
     static let legacySupport: URL = appSupportRoot.appendingPathComponent("Whisper", isDirectory: true)
 
     static let vocabularyFile = support.appendingPathComponent("vocabulary.json")
+
+    static let quickActionsFile = support.appendingPathComponent("quick-actions.json")
 }

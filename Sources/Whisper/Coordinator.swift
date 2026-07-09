@@ -11,6 +11,7 @@ final class Coordinator: ObservableObject {
     let permissions: PermissionsManager
     let loginItem: LoginItemManager
     let vocabulary: VocabularyStore
+    let quickActions: QuickActionStore
     let models: ModelManager
     let audioDevices: AudioDeviceManager
     let updateChecker: UpdateChecker
@@ -40,6 +41,14 @@ final class Coordinator: ObservableObject {
     // the keystrokes to whatever happens to be frontmost at that later
     // moment instead of the app the user was actually looking at.
     private var targetApp: NSRunningApplication?
+    // Whether quick actions are armed for this recording: the configured
+    // modifier was held the moment recording started (or none is required).
+    private var quickActionsArmed = false
+    // Holding the modifier is an explicit mode switch into action mode: if no
+    // action matches, nothing is pasted (the transcript goes to the clipboard
+    // instead). Only ever true when a modifier is configured — "Always active"
+    // must keep falling through to paste or dictation would break.
+    private var quickActionsForced = false
 
     init() {
         // Install crash handlers as early as possible so we catch failures during
@@ -50,6 +59,7 @@ final class Coordinator: ObservableObject {
         permissions = PermissionsManager()
         loginItem = LoginItemManager()
         vocabulary = VocabularyStore()
+        quickActions = QuickActionStore()
         models = ModelManager()
         audioDevices = AudioDeviceManager()
         updateChecker = UpdateChecker()
@@ -285,6 +295,11 @@ final class Coordinator: ObservableObject {
             lastPollText = ""
             detectedLanguage = nil
             languageRechecked = false
+            let modifier = QuickActionModifier(
+                rawValue: UserDefaults.standard.string(forKey: PrefKey.quickActionsModifier) ?? "") ?? .command
+            quickActionsForced = modifier != .none
+                && NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(modifier.flags)
+            quickActionsArmed = modifier == .none || quickActionsForced
             incrementalActive = currentMode() == .realtime
                 && currentInsertion() == .incremental
                 && permissions.accessibilityTrusted
@@ -440,6 +455,36 @@ final class Coordinator: ObservableObject {
                 return
             }
 
+            // Voice quick actions (opt-in): if the utterance matches a
+            // user-defined command, run it instead of pasting anything.
+            if quickActionsArmed, UserDefaults.standard.bool(forKey: PrefKey.quickActionsEnabled) {
+                if let match = await resolveQuickAction(raw) {
+                    state.lastTranscript = raw
+                    switch QuickActionExecutor.execute(match.action, query: match.query) {
+                    case .success:
+                        SoundService.play(.done)
+                        state.setStatus(.idle)
+                    case .failure(let err):
+                        state.setError(AppError(err.message, hint: err.hint))
+                    }
+                    hud.hide()
+                    state.clearLive()
+                    return
+                }
+                // Modifier held = explicit action mode. A miss must not paste —
+                // the user signalled a command, not dictation.
+                if quickActionsForced {
+                    state.lastTranscript = raw
+                    ClipboardService.set(raw)
+                    state.setError(AppError(
+                        "No quick action matched",
+                        hint: "copied “\(raw.prefix(40))” to the clipboard instead"))
+                    hud.hide()
+                    state.clearLive()
+                    return
+                }
+            }
+
             var finalText = raw
             let rewriteOn = UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled)
             let languageHint = languageRepairHint()
@@ -574,6 +619,24 @@ final class Coordinator: ObservableObject {
               !detected.isEmpty else { return .auto }
         detectedLanguage = detected
         return .pinned(detected)
+    }
+
+    /// Hybrid quick-action detection: instant local trigger match first, then
+    /// (opt-in, short utterances only) LLM intent classification via the
+    /// configured Rewrite provider. Nil means "ordinary dictation — paste it".
+    private func resolveQuickAction(_ transcript: String) async -> QuickActionMatcher.Match? {
+        let actions = quickActions.actions
+        guard actions.contains(where: \.enabled) else { return nil }
+        if let local = QuickActionMatcher.match(transcript, actions: actions) {
+            return local
+        }
+        guard UserDefaults.standard.bool(forKey: PrefKey.quickActionsLLMFallback),
+              transcript.count < 200,   // long dictation is never a command
+              let cfg = rewriteConfig() else { return nil }
+        state.setStatus(.rewriting)
+        guard let match = await QuickActionClassifier.classify(transcript, actions: actions, config: cfg),
+              let action = actions.first(where: { $0.id == match.actionID }) else { return nil }
+        return QuickActionMatcher.Match(action: action, query: match.query)
     }
 
     private func rewriteConfig() -> RewriteService.Config? {
