@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset=".github/readme-cover.png">
+  <img alt="Looped Whisper" src=".github/readme-cover-light.png" width="100%">
+</picture>
+
 # Looped Whisper
 
 A free, open-source, **Mac-only** voice transcription utility for developers. It
