@@ -3,12 +3,18 @@
   <img alt="Looped Whisper" src=".github/readme-cover-light.png" width="100%">
 </picture>
 
-# Looped Whisper
+<div align="center">
+
+# Looped Whisper<br/><sub><b>Hold a key, speak — your words land at the cursor.</b></sub><br/><br/>[![Release](https://github.com/loopedautomation/whisper/actions/workflows/release.yml/badge.svg)](https://github.com/loopedautomation/whisper/actions/workflows/release.yml) [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](./LICENSE) [![Platform](https://img.shields.io/badge/macOS%2014%2B-Apple%20Silicon-8b5cf6)](https://github.com/loopedautomation/whisper/releases)
+
+</div>
 
 A free, open-source, **Mac-only** voice transcription utility for developers. It
 runs **local open-source Whisper models** (bring your own model) — no cloud
 transcription. It lives in the menu bar, is driven by global hotkeys, and the
 transcribed text is copied to the clipboard and pasted at your cursor.
+
+**Contents:** [Features](#features) · [Install](#install) · [Build & run](#build--run) · [LLM rewrite](#llm-rewrite) · [Tests](#tests) · [License](#license)
 
 > Apple Silicon, macOS 14+. Transcription is powered by
 > [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML).
