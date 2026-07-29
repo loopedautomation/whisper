@@ -1,0 +1,30 @@
+name: Test
+
+# Runs the unit tests on a real macOS toolchain. `swift test` needs a full
+# Xcode (the KeyboardShortcuts dependency uses the #Preview macro, and XCTest
+# ships with Xcode), so it can't run on a machine with Command Line Tools only.
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6+)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      # Resolving WhisperKit and speech-swift is the slow part of a cold run.
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
+          restore-keys: spm-${{ runner.os }}-
+
+      - run: swift test

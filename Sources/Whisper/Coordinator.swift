@@ -12,6 +12,8 @@ final class Coordinator: ObservableObject {
     let loginItem: LoginItemManager
     let vocabulary: VocabularyStore
     let quickActions: QuickActionStore
+    let style: StyleStore
+    let learner: StyleLearner
     let models: ModelManager
     let audioDevices: AudioDeviceManager
     let updateChecker: UpdateChecker
@@ -49,6 +51,17 @@ final class Coordinator: ObservableObject {
     // instead). Only ever true when a modifier is configured — "Always active"
     // must keep falling through to paste or dictation would break.
     private var quickActionsForced = false
+    // The last app that wasn't us, updated continuously. Deliberately separate
+    // from `targetApp`: this one moves as the user switches apps, so it must
+    // never be read at delivery time — only when *starting* an action from our
+    // own menu, where the frontmost app is already us.
+    private var lastFrontmostApp: NSRunningApplication?
+    // Selection rewrite: the copy runs concurrently with recording so the mic
+    // is live before the user starts speaking. Held here so the pipeline tail
+    // can await whatever the copy produced.
+    private var selectionTask: Task<String, Error>?
+    private var selectionRewriteActive = false
+    private var frontmostObserver: NSObjectProtocol?
 
     init() {
         // Install crash handlers as early as possible so we catch failures during
@@ -60,6 +73,8 @@ final class Coordinator: ObservableObject {
         loginItem = LoginItemManager()
         vocabulary = VocabularyStore()
         quickActions = QuickActionStore()
+        style = StyleStore()
+        learner = StyleLearner()
         models = ModelManager()
         audioDevices = AudioDeviceManager()
         updateChecker = UpdateChecker()
@@ -75,9 +90,35 @@ final class Coordinator: ObservableObject {
         hotkeys = HotkeyManager(coordinator: self)
         hotkeys?.register()
         configureFnMonitor()
+        observeFrontmostApp()
         preloadModelInBackground()
         checkForUpdatesInBackground()
         state.hasPendingCrashLogs = CrashReporter.hasPendingLogs()
+    }
+
+    /// Tracks the last app that wasn't us, for the menu path only — opening our
+    /// menu makes *us* frontmost, so by the time the menu item fires there is
+    /// nothing useful to read from `NSWorkspace.frontmostApplication`.
+    ///
+    /// This deliberately does **not** touch `targetApp`. `targetApp` is captured
+    /// once when an action starts and must stay put: transcription plus a model
+    /// call can take tens of seconds, and if delivery followed the user's focus
+    /// the rewrite would paste into whatever app they switched to meanwhile.
+    private func observeFrontmostApp() {
+        frontmostObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didActivateApplicationNotification,
+            object: nil, queue: .main
+        ) { [weak self] note in
+            guard let app = note.userInfo?[NSWorkspace.applicationUserInfoKey] as? NSRunningApplication,
+                  app.bundleIdentifier != Bundle.main.bundleIdentifier else { return }
+            Task { @MainActor in self?.lastFrontmostApp = app }
+        }
+    }
+
+    deinit {
+        if let frontmostObserver {
+            NSWorkspace.shared.notificationCenter.removeObserver(frontmostObserver)
+        }
     }
 
     // MARK: - updates
@@ -232,39 +273,47 @@ final class Coordinator: ObservableObject {
         if state.isRecording { endRecording(silent: true) } else { beginRecording(silent: true) }
     }
 
-    func beginRecording(silent: Bool = false) {
-        guard !state.isRecording else { return }
-        // TranscriptionService is an actor: starting a recording while it's
-        // still finishing a previous transcribe/rewrite pass — or still
-        // downloading/loading a newly-switched model — doesn't fail, it just
-        // silently queues behind that work. The status line then gets
-        // overwritten to "Recording…"/"Transcribing…", hiding what's actually
-        // still happening, so it can look stuck for as long as that takes
-        // (worst case: minutes, for a multi-GB model download). Refuse up
-        // front with a specific reason instead.
-        if state.isBusy {
-            let reason: String
-            switch state.status {
-            case .loadingModel(let label): reason = "\(label) is still loading"
-            case .transcribing: reason = "Still transcribing the previous recording"
-            case .rewriting: reason = "Still cleaning up the previous recording"
-            default: reason = "Still busy"
-            }
-            state.setError(AppError(reason, hint: "wait a moment and try again"))
-            return
-        }
-        // Capture the dictation target before anything else — a permission
-        // prompt below, or our own menu/HUD, could otherwise become
-        // momentarily frontmost and get captured instead.
+    /// Records the app the user is working in, so keystrokes land there later
+    /// even if focus drifts while we transcribe. Skips our own windows.
+    private func captureTargetApp() {
         if let frontmost = NSWorkspace.shared.frontmostApplication,
            frontmost.bundleIdentifier != Bundle.main.bundleIdentifier {
             targetApp = frontmost
+        } else if let last = lastFrontmostApp, !last.isTerminated {
+            // We're frontmost (our menu is open, or a stray activation) — fall
+            // back to the last app the user was actually in.
+            targetApp = last
         } else if targetApp?.isTerminated != false {
             // Don't hold on to a target from a previous session that has since
             // quit — refocusing it would silently fail and the paste would go
             // to whatever happens to be frontmost.
             targetApp = nil
         }
+    }
+
+    /// TranscriptionService is an actor: starting a recording while it's still
+    /// finishing a previous transcribe/rewrite pass — or still
+    /// downloading/loading a newly-switched model — doesn't fail, it just
+    /// silently queues behind that work. The status line then gets overwritten
+    /// to "Recording…"/"Transcribing…", hiding what's actually still happening,
+    /// so it can look stuck for as long as that takes (worst case: minutes, for
+    /// a multi-GB model download). Refuse up front with a specific reason.
+    private func ensureNotBusy() -> Bool {
+        guard state.isBusy else { return true }
+        let reason: String
+        switch state.status {
+        case .loadingModel(let label): reason = "\(label) is still loading"
+        case .transcribing: reason = "Still transcribing the previous recording"
+        case .rewriting: reason = "Still cleaning up the previous recording"
+        default: reason = "Still busy"
+        }
+        state.setError(AppError(reason, hint: "wait a moment and try again"))
+        return false
+    }
+
+    /// True when the mic is usable right now. Otherwise surfaces the reason
+    /// (or triggers the system prompt) and returns false.
+    private func ensureMicrophoneAccess() -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
         case .denied, .restricted:
             // Permission was explicitly refused — the system prompt won't reappear,
@@ -273,13 +322,23 @@ final class Coordinator: ObservableObject {
                 "Microphone access denied",
                 hint: "enable it in System Settings → Privacy & Security → Microphone"))
             permissions.openMicrophoneSettings()
-            return
+            return false
         case .notDetermined:
             permissions.requestMicrophone()
-            return
+            return false
         default:
-            break
+            return true
         }
+    }
+
+    func beginRecording(silent: Bool = false) {
+        guard !state.isRecording, !selectionRewriteActive else { return }
+        guard ensureNotBusy() else { return }
+        // Capture the dictation target before anything else — a permission
+        // prompt below, or our own menu/HUD, could otherwise become
+        // momentarily frontmost and get captured instead.
+        captureTargetApp()
+        guard ensureMicrophoneAccess() else { return }
         do {
             try recorder.start()
             state.clearLive()
@@ -313,7 +372,7 @@ final class Coordinator: ObservableObject {
     }
 
     func endRecording(silent: Bool = false) {
-        guard state.isRecording else { return }
+        guard state.isRecording, !selectionRewriteActive else { return }
         stopEscMonitor()
         stopRealtimePolling()
         let samples = recorder.stop()
@@ -329,9 +388,284 @@ final class Coordinator: ObservableObject {
         stopRealtimePolling()
         _ = recorder.stop()          // discard samples
         incrementalActive = false
+        // Abandon an in-flight selection rewrite too: the clipboard already
+        // holds the copied selection, but nothing is pasted back.
+        selectionRewriteActive = false
+        selectionTask?.cancel()
+        selectionTask = nil
         hud.hide()
         state.clearLive()
         state.setStatus(.idle)
+    }
+
+    // MARK: - selection rewrite
+
+    /// Hotkey down: copy the selection and start listening for the instruction.
+    ///
+    /// Both happen at once. The copy needs up to a second of round-tripping
+    /// through the other app's pasteboard, and making the user wait for it
+    /// would clip the first word of whatever they say.
+    func beginSelectionRewrite() {
+        guard !state.isRecording, !selectionRewriteActive else { return }
+        captureTargetApp()
+
+        // Preflight everything that can fail before we take over the user's
+        // clipboard, so a misconfiguration never costs them their clipboard.
+        // Re-read the config first: it's hand-edited, and checking the copy
+        // parsed at launch would run stale rules — or miss a typo entirely.
+        style.reload()
+        guard style.profile != nil else {
+            state.setError(AppError(
+                style.loadError ?? "style.json couldn't be read",
+                hint: "fix it in Settings → Style, then try again"))
+            return
+        }
+        guard selectionRewriteConfig() != nil else {
+            state.setError(AppError(
+                "No rewrite model configured",
+                hint: "add an API key or a local model URL in Settings → Rewrite"))
+            return
+        }
+        permissions.refresh()
+        guard permissions.accessibilityTrusted else {
+            // Reading a selection means synthesizing ⌘C into another app.
+            state.setError(AppError(
+                "Rewriting a selection needs Accessibility",
+                hint: "grant it in System Settings → Privacy & Security"))
+            permissions.openAccessibilitySettings()
+            return
+        }
+        guard ensureMicrophoneAccess() else { return }
+
+        do {
+            try recorder.start()
+            state.clearLive()
+            state.lastWarning = nil
+            state.clearError()
+            state.setStatus(.recording)
+            SoundService.play(.start)
+            startEscMonitor()
+            selectionRewriteActive = true
+            detectedLanguage = nil
+            incrementalActive = false          // never type live into a rewrite
+            let app = targetApp
+            selectionTask = Task { try await SelectionService.capture(targetApp: app) }
+        } catch {
+            state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
+        }
+    }
+
+    /// Hotkey up: transcribe the instruction, rewrite, paste over the selection.
+    func endSelectionRewrite() {
+        guard selectionRewriteActive, state.isRecording else { return }
+        stopEscMonitor()
+        let samples = recorder.stop()
+        SoundService.play(.stop)
+        state.setStatus(.transcribing)
+        Task { await finishSelectionRewrite(samples: samples) }
+    }
+
+    private func finishSelectionRewrite(samples: [Float]) async {
+        defer {
+            selectionRewriteActive = false
+            selectionTask = nil
+            state.clearLive()
+        }
+
+        // The selection is the thing we can't proceed without, so resolve it
+        // first — a missing selection shouldn't cost a transcription.
+        let selection: String
+        do {
+            selection = try await selectionTask?.value ?? ""
+        } catch let error as SelectionService.SelectionError {
+            state.setError(AppError(error.errorDescription ?? "Couldn't read the selection",
+                                    hint: error.hint))
+            return
+        } catch {
+            state.setError(AppError("Couldn't read the selection", hint: error.localizedDescription))
+            return
+        }
+
+        let transcript: String
+        do {
+            transcript = try await transcription.transcribe(
+                samples: samples,
+                selection: languageSelection(),
+                vocabulary: vocabulary.terms)
+        } catch let error as TranscriptionService.TranscriptionError {
+            switch error {
+            case .empty:
+                // Nothing said: the natural reading is a plain "rewrite it",
+                // but silently guessing an instruction would be worse than
+                // asking again, so stop and say so.
+                state.setStatus(.idle)
+                state.lastWarning = "Didn't catch an instruction — nothing was changed."
+            case .modelNotLoaded:
+                state.setError(AppError(
+                    "Transcription model isn't ready",
+                    hint: "wait for it to finish loading, or pick one in Settings → Model"))
+            }
+            return
+        } catch {
+            state.setError(AppError("Transcription failed", hint: error.localizedDescription))
+            return
+        }
+
+        await applyRewrite(selection: selection, instruction: transcript)
+    }
+
+    /// Rewrite the selection with a **typed** instruction instead of a spoken
+    /// one. Same pipeline from here on — the transcript is just a string, and
+    /// nothing downstream cares where it came from. This is also what makes the
+    /// feature usable (and demonstrable) without a working microphone.
+    func promptForTypedRewrite() {
+        guard !state.isRecording, !selectionRewriteActive else { return }
+        style.reload()
+        guard style.profile != nil else {
+            state.setError(AppError(style.loadError ?? "style.json couldn't be read",
+                                    hint: "fix it in Settings → Style, then try again"))
+            return
+        }
+        guard selectionRewriteConfig() != nil else {
+            state.setError(AppError("No rewrite model configured",
+                                    hint: "set one up in Settings → Rewrite"))
+            return
+        }
+        permissions.refresh()
+        guard permissions.accessibilityTrusted else {
+            state.setError(AppError(
+                "Rewriting a selection needs Accessibility",
+                hint: "grant it in System Settings → Privacy & Security"))
+            permissions.openAccessibilitySettings()
+            return
+        }
+
+        // `targetApp` is whatever was frontmost before our menu opened; both the
+        // copy and the paste re-activate it, so the focus round-trip is fine.
+        captureTargetApp()
+        let app = targetApp
+        // Claimed before the modal opens and held until the paste completes.
+        // `alert.runModal()` spins a nested run loop in which the global
+        // hotkeys still fire, so without this the user could start a dictation
+        // mid-alert and end up with two pipelines writing the clipboard and
+        // synthesizing paste keystrokes at once.
+        selectionRewriteActive = true
+        // Let the menu bar finish dismissing before opening the modal —
+        // running it inline from the menu's own action leaves the alert
+        // without key focus.
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            guard let instruction = self.askForInstruction() else {
+                self.selectionRewriteActive = false
+                return
+            }
+            Task {
+                defer { self.selectionRewriteActive = false }
+                do {
+                    let selection = try await SelectionService.capture(targetApp: app)
+                    await self.applyRewrite(selection: selection, instruction: instruction)
+                } catch let error as SelectionService.SelectionError {
+                    self.state.setError(AppError(
+                        error.errorDescription ?? "Couldn't read the selection", hint: error.hint))
+                } catch {
+                    self.state.setError(AppError("Couldn't read the selection",
+                                                 hint: error.localizedDescription))
+                }
+            }
+        }
+    }
+
+    /// Modal prompt for the instruction. `nil` when the user cancels.
+    private func askForInstruction() -> String? {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Rewrite selection"
+        alert.informativeText = "What should I do with it? For example: “make it shorter”, "
+            + "“fix the typos”, or just “rewrite it”."
+        alert.addButton(withTitle: "Rewrite")
+        alert.addButton(withTitle: "Cancel")
+        let field = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
+        field.placeholderString = "rewrite it"
+        alert.accessoryView = field
+        alert.window.initialFirstResponder = field
+        guard alert.runModal() == .alertFirstButtonReturn else { return nil }
+        let typed = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        // An empty box is the same request as saying "rewrite it".
+        return typed.isEmpty ? "rewrite it" : typed
+    }
+
+    /// Shared tail for the spoken and typed paths: normalize the instruction,
+    /// rewrite, then paste. `instruction` is a raw transcript or typed text —
+    /// nothing downstream cares which.
+    func applyRewrite(selection: String, instruction: String) async {
+        guard let profile = style.profile else {
+            state.setError(AppError(style.loadError ?? "style.json couldn't be read",
+                                    hint: "fix it in Settings → Style, then try again"))
+            return
+        }
+        guard let config = selectionRewriteConfig() else {
+            state.setError(AppError("No rewrite model configured",
+                                    hint: "set one up in Settings → Rewrite"))
+            return
+        }
+
+        // Either the user's own writing, or one of our rewrites they've since
+        // edited. Recorded before the rewrite so the edit informs this call.
+        learner.noteSelection(selection)
+
+        state.setStatus(.rewriting)
+        let command = CommandNormalizer.normalize(instruction)
+        let resolved = learner.resolve(profile, for: selection)
+        // Size the ceiling to the passage. A fixed budget truncates long
+        // selections, and a truncated reply pasted over the original amputates
+        // the tail of the user's text. ~4 chars per token, doubled for headroom
+        // (an "expand this" rewrite is longer than its input), floored so short
+        // passages still get room and capped to stay within model limits.
+        let budget = min(max(4096, (selection.count / 4) * 2), 16_384)
+        let outcome = await SelectionRewriter.rewrite(
+            selection: selection,
+            command: command,
+            style: resolved) { system, user in
+                try await RewriteService.complete(
+                    system: system, user: user,
+                    provider: config.provider, model: config.model, apiKey: config.apiKey,
+                    maxTokens: budget)
+            }
+
+        switch outcome {
+        case .failed(let reason):
+            // Nothing usable came back, so nothing is pasted — the user's text
+            // is left exactly as it was.
+            state.setError(AppError(reason, hint: "your selection wasn't changed"))
+        case .rewritten(let text, let unmetRules):
+            state.lastTranscript = text
+            // Remember what we pasted, so that if this text comes back as a
+            // selection later with edits in it, the difference can be read as
+            // a correction.
+            learner.noteProduced(text)
+            SelectionService.replaceSelection(with: text, targetApp: targetApp) { [weak self] result in
+                Task { @MainActor in
+                    guard result == .copiedOnly else { return }
+                    // Focus was lost between the copy and the paste, so the
+                    // selection is still there and the rewrite is on the
+                    // clipboard. Say so — silently doing nothing would look
+                    // like the rewrite had failed.
+                    self?.state.setError(AppError(
+                        "Nothing was focused to paste into (the rewrite is on your clipboard)",
+                        hint: "re-select the text and press ⌘V"))
+                }
+            }
+            SoundService.play(.done)
+            if unmetRules.isEmpty {
+                if case .error = state.status {} else { state.setStatus(.idle) }
+            } else {
+                // A rule the user asked for did not hold. Say so loudly — the
+                // rewrite is still pasted, but never silently short of a rule.
+                state.setError(AppError(
+                    "Rewrite pasted, but \(unmetRules.count == 1 ? "a rule" : "\(unmetRules.count) rules") didn't hold",
+                    hint: unmetRules.joined(separator: "; ")))
+            }
+        }
     }
 
     // MARK: - Esc-to-cancel
@@ -425,6 +759,10 @@ final class Coordinator: ObservableObject {
                 vocabulary: vocabulary.terms
             )
             state.liveConfirmed = raw
+            // Your own words, in your own phrasing. Harvested *before* the LLM
+            // cleanup below — the cleaned version is the model's prose, and
+            // learning from it would teach the app to imitate itself.
+            learner.harvestDictation(raw)
 
             // Incremental live-insertion: we've already typed the confirmed prefix
             // during recording. Type only the final remainder, and skip rewrite
@@ -448,6 +786,10 @@ final class Coordinator: ObservableObject {
                     TextInserter.typeString(remainder, targetApp: targetApp)
                 }
                 state.lastTranscript = raw
+                // Same reason as the batch path below: this text is now in the
+                // document, and selecting it later must not be mistaken for
+                // hand-typed prose — its punctuation is the transcriber's.
+                learner.noteProduced(raw)
                 SoundService.play(.done)
                 if case .error = state.status {} else { state.setStatus(.idle) }
                 hud.hide()
@@ -506,6 +848,11 @@ final class Coordinator: ObservableObject {
             }
 
             state.lastTranscript = finalText
+            // Remember what lands in the document. Without this, selecting a
+            // previously-dictated (and LLM-cleaned) paragraph to rewrite would
+            // classify it as the user's own writing and harvest the cleanup
+            // model's prose — and its punctuation — into the corpus.
+            learner.noteProduced(finalText)
             deliver(finalText)
             SoundService.play(.done)
             if case .error = state.status {} else { state.setStatus(.idle) }
@@ -637,6 +984,38 @@ final class Coordinator: ObservableObject {
         guard let match = await QuickActionClassifier.classify(transcript, actions: actions, config: cfg),
               let action = actions.first(where: { $0.id == match.actionID }) else { return nil }
         return QuickActionMatcher.Match(action: action, query: match.query)
+    }
+
+    /// Provider settings for the selection rewrite. Separate from the dictation
+    /// cleanup config so the two can point at different models — a fast local
+    /// one for transcript tidying, a stronger one for rewriting your prose (or
+    /// the reverse, if the selection is private and should stay on-device).
+    struct SelectionModel {
+        var provider: RewriteService.Provider
+        var model: String
+        var apiKey: String
+    }
+
+    /// `nil` when nothing usable is configured, which the caller turns into an
+    /// actionable error rather than a silent no-op.
+    private func selectionRewriteConfig() -> SelectionModel? {
+        let defaults = UserDefaults.standard
+        let model = defaults.string(forKey: PrefKey.selectionRewriteModel) ?? ""
+        guard !model.isEmpty else { return nil }
+        let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
+        let providerPref = RewriteProvider(
+            rawValue: defaults.string(forKey: PrefKey.selectionRewriteProvider) ?? "") ?? .anthropic
+        switch providerPref {
+        case .anthropic:
+            guard !key.isEmpty else { return nil }
+            return SelectionModel(provider: .anthropic, model: model, apiKey: key)
+        case .openaiCompatible:
+            // Locally-hosted servers need a URL but usually no key, so an empty
+            // key is fine here — it just isn't sent.
+            let base = defaults.string(forKey: PrefKey.selectionRewriteBaseURL) ?? ""
+            guard !base.isEmpty else { return nil }
+            return SelectionModel(provider: .openaiCompatible(baseURL: base), model: model, apiKey: key)
+        }
     }
 
     private func rewriteConfig() -> RewriteService.Config? {
