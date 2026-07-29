@@ -421,9 +421,7 @@ final class Coordinator: ObservableObject {
             return
         }
         guard selectionRewriteConfig() != nil else {
-            state.setError(AppError(
-                "No rewrite model configured",
-                hint: "add an API key or a local model URL in Settings → Rewrite"))
+            state.setError(unconfiguredError())
             return
         }
         permissions.refresh()
@@ -450,6 +448,9 @@ final class Coordinator: ObservableObject {
             incrementalActive = false          // never type live into a rewrite
             let app = targetApp
             selectionTask = Task { try await SelectionService.capture(targetApp: app) }
+            // Loading the on-device model takes a moment; do it now, under
+            // cover of the recording, rather than after the user stops talking.
+            OnDeviceModelClient.prewarm()
         } catch {
             state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
         }
@@ -527,8 +528,7 @@ final class Coordinator: ObservableObject {
             return
         }
         guard selectionRewriteConfig() != nil else {
-            state.setError(AppError("No rewrite model configured",
-                                    hint: "set one up in Settings → Rewrite"))
+            state.setError(unconfiguredError())
             return
         }
         permissions.refresh()
@@ -604,8 +604,7 @@ final class Coordinator: ObservableObject {
             return
         }
         guard let config = selectionRewriteConfig() else {
-            state.setError(AppError("No rewrite model configured",
-                                    hint: "set one up in Settings → Rewrite"))
+            state.setError(unconfiguredError())
             return
         }
 
@@ -986,6 +985,21 @@ final class Coordinator: ObservableObject {
         return QuickActionMatcher.Match(action: action, query: match.query)
     }
 
+    /// Why the rewrite can't run. The on-device provider fails for a different
+    /// reason than a missing API key, and "add an API key" would be useless
+    /// advice when the real answer is a System Settings toggle.
+    private func unconfiguredError() -> AppError {
+        let pref = RewriteProvider(
+            rawValue: UserDefaults.standard.string(forKey: PrefKey.selectionRewriteProvider) ?? "")
+            ?? .anthropic
+        guard pref == .appleOnDevice else {
+            return AppError("No rewrite model configured",
+                            hint: "add an API key or a local model URL in Settings → Style")
+        }
+        let state = OnDeviceModelClient.availability()
+        return AppError(state.summary, hint: state.recovery)
+    }
+
     /// Provider settings for the selection rewrite. Separate from the dictation
     /// cleanup config so the two can point at different models — a fast local
     /// one for transcript tidying, a stronger one for rewriting your prose (or
@@ -1001,11 +1015,18 @@ final class Coordinator: ObservableObject {
     private func selectionRewriteConfig() -> SelectionModel? {
         let defaults = UserDefaults.standard
         let model = defaults.string(forKey: PrefKey.selectionRewriteModel) ?? ""
-        guard !model.isEmpty else { return nil }
         let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
         let providerPref = RewriteProvider(
             rawValue: defaults.string(forKey: PrefKey.selectionRewriteProvider) ?? "") ?? .anthropic
+        // Every provider but the on-device one is identified by a model name.
+        guard providerPref == .appleOnDevice || !model.isEmpty else { return nil }
         switch providerPref {
+        case .appleOnDevice:
+            // Nothing to configure — but only offer it when the OS says the
+            // model is actually usable, so an unavailable state surfaces as a
+            // specific error rather than a generic "not configured".
+            guard OnDeviceModelClient.availability().isAvailable else { return nil }
+            return SelectionModel(provider: .appleOnDevice, model: "", apiKey: "")
         case .anthropic:
             guard !key.isEmpty else { return nil }
             return SelectionModel(provider: .anthropic, model: model, apiKey: key)
@@ -1020,8 +1041,9 @@ final class Coordinator: ObservableObject {
 
     private func rewriteConfig() -> RewriteService.Config? {
         let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
-        guard !key.isEmpty else { return nil }
         let providerPref = RewriteProvider(rawValue: UserDefaults.standard.string(forKey: PrefKey.rewriteProvider) ?? "") ?? .anthropic
+        // The on-device model needs no key; the HTTP providers do.
+        guard providerPref == .appleOnDevice || !key.isEmpty else { return nil }
         let model = UserDefaults.standard.string(forKey: PrefKey.rewriteModel) ?? "claude-haiku-4-5-20251001"
         let template = UserDefaults.standard.string(forKey: PrefKey.rewritePrompt) ?? DefaultPref.rewritePromptTemplate
         let provider: RewriteService.Provider
@@ -1031,6 +1053,9 @@ final class Coordinator: ObservableObject {
         case .openaiCompatible:
             let base = UserDefaults.standard.string(forKey: PrefKey.rewriteBaseURL) ?? "https://api.openai.com/v1"
             provider = .openaiCompatible(baseURL: base)
+        case .appleOnDevice:
+            guard OnDeviceModelClient.availability().isAvailable else { return nil }
+            provider = .appleOnDevice
         }
         return RewriteService.Config(provider: provider, model: model, apiKey: key, promptTemplate: template)
     }
