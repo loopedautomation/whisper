@@ -555,3 +555,81 @@ final class SelectionRewriterTests: XCTestCase {
         XCTAssertTrue(reason.contains("incomplete"), "unhelpful reason: \(reason)")
     }
 }
+
+final class OnDeviceModelClientTests: XCTestCase {
+
+    // MARK: - context budgeting
+
+    /// The window covers instructions + prompt + reply together, so a passage
+    /// that leaves no room for an answer must fail before the model runs — a
+    /// rewrite that dies partway is worse than one that never started.
+    func testOverlongSelectionIsRejectedBeforeGenerating() {
+        let huge = String(repeating: "word ", count: 4000)   // ~6k tokens
+        XCTAssertThrowsError(
+            try OnDeviceModelClient.replyBudget(
+                system: "sys", user: huge, requested: 4096, contextSize: 4096)
+        ) { error in
+            XCTAssertEqual(error as? RewriteError, .selectionTooLong)
+        }
+    }
+
+    /// A short passage gets room to grow — "expand this" needs more output than
+    /// input, so the budget can't simply mirror the passage length.
+    func testShortSelectionGetsWorkableBudget() throws {
+        let budget = try OnDeviceModelClient.replyBudget(
+            system: String(repeating: "s", count: 800),
+            user: String(repeating: "u", count: 800),
+            requested: 4096, contextSize: 4096)
+        XCTAssertGreaterThan(budget, 256)
+        // …but never more than the window can hold.
+        XCTAssertLessThan(budget, 4096)
+    }
+
+    /// The requested ceiling is still respected when the window is roomy.
+    func testBudgetNeverExceedsWhatWasAskedFor() throws {
+        let budget = try OnDeviceModelClient.replyBudget(
+            system: "sys", user: "short passage", requested: 512, contextSize: 4096)
+        XCTAssertEqual(budget, 512)
+    }
+
+    // MARK: - refusal detection
+
+    /// In permissive mode the model can decline by *returning* a refusal rather
+    /// than throwing. Undetected, that string gets pasted over the user's text.
+    func testRefusalReplyIsDetected() {
+        let passage = "The quarterly numbers slipped because hiring stalled in March."
+        XCTAssertTrue(OnDeviceModelClient.isRefusal(
+            reply: "I can't help with that request.", prompt: passage))
+        XCTAssertTrue(OnDeviceModelClient.isRefusal(
+            reply: "I'm sorry, but I'm not able to assist with this.", prompt: passage))
+    }
+
+    /// A genuine rewrite reuses the passage's vocabulary, so it must survive
+    /// even when it happens to open with refusal-shaped words — this is the
+    /// false positive that would silently discard good work.
+    func testGenuineRewriteIsNotMistakenForARefusal() {
+        let passage = "I cannot make the Friday meeting because I am travelling to Berlin."
+        XCTAssertFalse(OnDeviceModelClient.isRefusal(
+            reply: "I can't make Friday — I'm travelling to Berlin.", prompt: passage))
+    }
+
+    /// Long replies are rewrites, whatever they contain.
+    func testLongReplyIsNeverARefusal() {
+        let passage = String(repeating: "the project timeline slipped again ", count: 20)
+        let reply = "I can't " + String(repeating: "say the timeline slipped again ", count: 30)
+        XCTAssertFalse(OnDeviceModelClient.isRefusal(reply: reply, prompt: passage))
+    }
+
+    /// Availability must resolve on any OS without trapping — on a Mac without
+    /// Apple Intelligence this is the path every caller takes.
+    func testAvailabilityIsAlwaysAnswerable() {
+        let state = OnDeviceModelClient.availability()
+        if state.isAvailable {
+            XCTAssertNil(state.recovery)
+        } else {
+            // Anything unavailable must tell the user what to do about it.
+            XCTAssertNotNil(state.recovery, "unavailable state needs a recovery hint: \(state)")
+        }
+        XCTAssertFalse(state.summary.isEmpty)
+    }
+}

@@ -797,17 +797,27 @@ private struct StyleTab: View {
                 Picker("Provider", selection: $provider) {
                     ForEach(RewriteProvider.allCases) { Text($0.label).tag($0.rawValue) }
                 }
-                if provider == RewriteProvider.openaiCompatible.rawValue {
-                    TextField("Base URL", text: $baseURL)
+                // The on-device model has nothing to configure — no key, no
+                // endpoint, no model name.
+                if provider != RewriteProvider.appleOnDevice.rawValue {
+                    if provider == RewriteProvider.openaiCompatible.rawValue {
+                        TextField("Base URL", text: $baseURL)
+                    }
+                    TextField("Model", text: $model)
                 }
-                TextField("Model", text: $model)
             }
-            .frame(height: provider == RewriteProvider.openaiCompatible.rawValue ? 88 : 60)
+            .frame(height: providerFormHeight)
 
-            Text(provider == RewriteProvider.openaiCompatible.rawValue
-                 ? "Point this at a local server (Ollama, LM Studio) to keep your writing on this machine. The API key from the Rewrite tab is reused, and simply not sent when it's empty."
-                 : "Uses the API key from the Rewrite tab. Your selection is sent to Anthropic — switch to an OpenAI-compatible local server to keep it on this machine.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            switch RewriteProvider(rawValue: provider) ?? .anthropic {
+            case .appleOnDevice:
+                onDeviceStatus
+            case .openaiCompatible:
+                Text("Point this at a local server (Ollama, LM Studio) to keep your writing on this machine. The API key from the Rewrite tab is reused, and simply not sent when it's empty.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            case .anthropic:
+                Text("Uses the API key from the Rewrite tab. Your selection is sent to Anthropic — switch to Apple Intelligence or a local server to keep it on this machine.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            }
 
             Divider()
 
@@ -853,6 +863,47 @@ private struct StyleTab: View {
                 d.set(model, forKey: PrefKey.selectionRewriteModel)
                 d.set(baseURL, forKey: PrefKey.selectionRewriteBaseURL)
             }
+        }
+    }
+
+    private var providerFormHeight: CGFloat {
+        switch RewriteProvider(rawValue: provider) ?? .anthropic {
+        case .appleOnDevice: return 32
+        case .openaiCompatible: return 88
+        case .anthropic: return 60
+        }
+    }
+
+    /// Availability of Apple's on-device model, plus honest expectations. It is
+    /// the private/free option, not the best one — saying so here is cheaper
+    /// than a user concluding the feature got worse.
+    @ViewBuilder
+    private var onDeviceStatus: some View {
+        let state = OnDeviceModelClient.availability()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: state.isAvailable
+                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(state.isAvailable ? .green : .orange)
+                Text(state.summary)
+                if let recovery = state.recovery {
+                    Text("— \(recovery)").foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            if state == .needsAppleIntelligence {
+                Button("Open System Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .font(.caption)
+            }
+
+            Text("Runs on this Mac: nothing is sent anywhere, no API key, works offline. It's a much smaller model than a hosted one — good for short everyday rewrites, weaker at matching your voice and at long or intricate instructions. Long selections won't fit and are reported rather than truncated.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

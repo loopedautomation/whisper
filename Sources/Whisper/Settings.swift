@@ -87,12 +87,27 @@ enum FnMode: String, CaseIterable, Identifiable {
 }
 
 enum RewriteProvider: String, CaseIterable, Identifiable {
-    case anthropic, openaiCompatible
+    case anthropic, openaiCompatible, appleOnDevice
     var id: String { rawValue }
-    var label: String { self == .anthropic ? "Anthropic (Claude)" : "OpenAI-compatible" }
+    var label: String {
+        switch self {
+        case .anthropic: return "Anthropic (Claude)"
+        case .openaiCompatible: return "OpenAI-compatible"
+        case .appleOnDevice: return "Apple Intelligence (on-device)"
+        }
+    }
     /// Sensible default model per provider — fast, low-cost tiers suited to
-    /// transcript cleanup.
-    var defaultModel: String { self == .anthropic ? "claude-haiku-4-5-20251001" : "gpt-5.4-mini" }
+    /// transcript cleanup. The on-device model isn't chosen by name.
+    var defaultModel: String {
+        switch self {
+        case .anthropic: return "claude-haiku-4-5-20251001"
+        case .openaiCompatible: return "gpt-5.4-mini"
+        case .appleOnDevice: return ""
+        }
+    }
+    /// True when the provider runs entirely on this Mac — nothing leaves it,
+    /// and no API key is involved.
+    var isLocal: Bool { self == .appleOnDevice }
 }
 
 /// A selectable transcription language. `code` is the ISO-639-1 hint passed to

@@ -68,6 +68,13 @@ struct QuickActionClassifier {
         var req: URLRequest
         let body: [String: Any]
         switch config.provider {
+        case .appleOnDevice:
+            // Runs in-process, not over HTTP. Quick-action classification is an
+            // optional fallback on top of local trigger matching, so declining
+            // it here just means triggers alone decide — no user-visible break.
+            throw NSError(domain: "QuickActionClassifier", code: 2, userInfo: [
+                NSLocalizedDescriptionKey:
+                    "The on-device model isn't used for quick-action classification."])
         case .anthropic:
             req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
             req.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
@@ -107,6 +114,8 @@ struct QuickActionClassifier {
             let choices = json?["choices"] as? [[String: Any]]
             let message = choices?.first?["message"] as? [String: Any]
             return message?["content"] as? String ?? ""
+        case .appleOnDevice:
+            return ""   // unreachable: the request above throws first
         }
     }
 }
