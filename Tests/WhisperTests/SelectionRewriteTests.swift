@@ -356,11 +356,18 @@ final class StyleProfileDecodingTests: XCTestCase {
         XCTAssertNil(profile.enforced.maxWords)
     }
 
-    /// The starter file shipped on first launch must itself parse.
+    /// The starter file shipped on first launch must itself parse — as a full
+    /// config, since it now demonstrates templates too.
     func testStarterFileIsValid() throws {
-        let profile = try decode(StyleStore.starterFile)
-        XCTAssertTrue(profile.enforced.straightenQuotes)
-        XCTAssertEqual(profile.enforced.substitutions.first?.find, "\u{2014}")
+        let config = try StyleConfig.decode(Data(StyleStore.starterFile.utf8))
+        XCTAssertTrue(config.base.enforced.straightenQuotes)
+        XCTAssertEqual(config.base.enforced.substitutions.first?.find, "\u{2014}")
+        // The examples have to be real, working templates, not illustrative
+        // JSON that would fail the moment someone edits it.
+        XCTAssertEqual(config.templateNames, ["email", "slack"])
+        XCTAssertEqual(config.profile(named: "slack").enforced.maxWords, 60)
+        // Shipped default is the base — templates are opt-in.
+        XCTAssertNil(config.defaultTemplate)
     }
 }
 

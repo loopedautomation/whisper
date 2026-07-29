@@ -414,7 +414,7 @@ final class Coordinator: ObservableObject {
         // Re-read the config first: it's hand-edited, and checking the copy
         // parsed at launch would run stale rules — or miss a typo entirely.
         style.reload()
-        guard style.profile != nil else {
+        guard style.config != nil else {
             state.setError(AppError(
                 style.loadError ?? "style.json couldn't be read",
                 hint: "fix it in Settings → Style, then try again"))
@@ -522,7 +522,7 @@ final class Coordinator: ObservableObject {
     func promptForTypedRewrite() {
         guard !state.isRecording, !selectionRewriteActive else { return }
         style.reload()
-        guard style.profile != nil else {
+        guard style.config != nil else {
             state.setError(AppError(style.loadError ?? "style.json couldn't be read",
                                     hint: "fix it in Settings → Style, then try again"))
             return
@@ -598,7 +598,7 @@ final class Coordinator: ObservableObject {
     /// rewrite, then paste. `instruction` is a raw transcript or typed text —
     /// nothing downstream cares which.
     func applyRewrite(selection: String, instruction: String) async {
-        guard let profile = style.profile else {
+        guard let styleConfig = style.config else {
             state.setError(AppError(style.loadError ?? "style.json couldn't be read",
                                     hint: "fix it in Settings → Style, then try again"))
             return
@@ -613,7 +613,10 @@ final class Coordinator: ObservableObject {
         learner.noteSelection(selection)
 
         state.setStatus(.rewriting)
-        let command = CommandNormalizer.normalize(instruction)
+        // Template names are recognized in the spoken command ("style it as an
+        // email"); anything unnamed falls back to the configured default.
+        let command = CommandNormalizer.normalize(instruction, templates: styleConfig.templateNames)
+        let profile = styleConfig.profile(named: command.template ?? styleConfig.defaultTemplate)
         let resolved = learner.resolve(profile, for: selection)
         // Size the ceiling to the passage. A fixed budget truncates long
         // selections, and a truncated reply pasted over the original amputates

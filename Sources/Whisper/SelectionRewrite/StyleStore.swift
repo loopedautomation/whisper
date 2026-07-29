@@ -11,7 +11,17 @@ import Combine
 /// failure they would never catch.
 @MainActor
 final class StyleStore: ObservableObject {
-    @Published private(set) var profile: StyleProfile?
+    /// The whole parsed file: base profile plus any named templates.
+    @Published private(set) var config: StyleConfig?
+
+    /// The profile a rewrite uses when no template is named — what the Settings
+    /// tab displays, and what mined rules are checked against.
+    var profile: StyleProfile? { config?.defaultProfile }
+
+    /// Resolves a template named in a spoken command.
+    func profile(named name: String?) -> StyleProfile? {
+        config?.profile(named: name ?? config?.defaultTemplate)
+    }
     /// Human-readable reason the config was rejected, naming the exact rule.
     @Published private(set) var loadError: String?
 
@@ -40,9 +50,28 @@ final class StyleStore: ObservableObject {
         // acting on a stale copy would silently discard hand-edits made since
         // the tab was opened.
         load()
-        guard let current = profile else { return false }
-        let updated = current.applying(proposal, replacement: replacement)
-        guard let data = try? updated.encoded() else { return false }
+        guard var current = config else { return false }
+        // Mined rules come from the whole corpus, so they belong on the base
+        // where every template inherits them.
+        current.base = current.base.applying(proposal, replacement: replacement)
+        guard let data = try? current.encoded() else { return false }
+        do {
+            try data.write(to: fileURL, options: .atomic)
+        } catch {
+            loadError = "Couldn't write style.json: \(error.localizedDescription)"
+            return false
+        }
+        load()
+        return true
+    }
+
+    /// Changes which template applies when the user doesn't name one.
+    @discardableResult
+    func setDefaultTemplate(_ name: String?) -> Bool {
+        load()
+        guard var current = config else { return false }
+        current.defaultTemplate = name
+        guard let data = try? current.encoded() else { return false }
         do {
             try data.write(to: fileURL, options: .atomic)
         } catch {
@@ -58,7 +87,7 @@ final class StyleStore: ObservableObject {
         // the first is a fresh install, the second would silently discard every
         // rule the user wrote.
         guard FileManager.default.fileExists(atPath: fileURL.path) else {
-            profile = .starter
+            config = StyleConfig(base: .starter)
             loadError = nil
             return
         }
@@ -66,18 +95,18 @@ final class StyleStore: ObservableObject {
         do {
             data = try Data(contentsOf: fileURL)
         } catch {
-            profile = nil
+            config = nil
             loadError = "Couldn't read style.json: \(error.localizedDescription)"
             return
         }
         do {
-            profile = try StyleProfile.decode(data)
+            config = try StyleConfig.decode(data)
             loadError = nil
         } catch let error as StyleProfileError {
-            profile = nil
+            config = nil
             loadError = error.description
         } catch {
-            profile = nil
+            config = nil
             loadError = "Couldn't read style.json: \(error.localizedDescription)"
         }
     }
@@ -120,7 +149,21 @@ final class StyleStore: ObservableObject {
           { "word": "delve" }
         ],
         "maxWords": null
-      }
+      },
+
+      "templates": {
+        "email": {
+          "voice": { "description": "Warmer than usual, still direct. No throat-clearing." },
+          "prompted": { "guidance": ["Open with the ask, not the context."] },
+          "enforced": { "maxWords": 200 }
+        },
+        "slack": {
+          "voice": { "description": "Lowercase, quick, no sign-off." },
+          "enforced": { "maxWords": 60 }
+        }
+      },
+
+      "defaultTemplate": null
     }
     """
 }
