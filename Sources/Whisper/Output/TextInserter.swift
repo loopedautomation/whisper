@@ -55,6 +55,16 @@ enum TextInserter {
         }
     }
 
+    /// `async` form of `waitForActivation`, for callers that need the app
+    /// frontmost before synthesizing a keystroke of their own (the selection
+    /// rewrite's ⌘C). Re-activates first, so callers don't repeat that too.
+    static func awaitActivation(of app: NSRunningApplication?) async {
+        refocus(app)
+        await withCheckedContinuation { continuation in
+            waitForActivation(of: app) { continuation.resume() }
+        }
+    }
+
     /// Waits the usual pasteboard settle time, then keeps polling briefly if
     /// the target app hasn't finished activating yet (a fixed delay races
     /// against slow app switches — the old cause of pastes landing nowhere).
@@ -93,11 +103,19 @@ enum TextInserter {
 
     /// Synthesizes Cmd+V into the frontmost app.
     static func paste() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let vKey = CGKeyCode(kVK_ANSI_V)
+        postCommandKey(CGKeyCode(kVK_ANSI_V))
+    }
 
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false) else {
+    /// Synthesizes Cmd+C into the frontmost app. Used to lift the selection out
+    /// of another application, which is the only portable way to read it.
+    static func copy() {
+        postCommandKey(CGKeyCode(kVK_ANSI_C))
+    }
+
+    private static func postCommandKey(_ key: CGKeyCode) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
             return
         }
         keyDown.flags = .maskCommand

@@ -39,4 +39,10 @@ enum AppPaths {
     static let vocabularyFile = support.appendingPathComponent("vocabulary.json")
 
     static let quickActionsFile = support.appendingPathComponent("quick-actions.json")
+    /// Hand-edited writing-style config for the selection rewrite.
+    static let styleFile = support.appendingPathComponent("style.json")
+    /// Learned writing style: the user's own samples and their edits to past
+    /// rewrites. Derived data, never leaves the machine except as the few
+    /// samples retrieval picks for a given rewrite.
+    static let styleCorpusFile = support.appendingPathComponent("style-corpus.json")
 }

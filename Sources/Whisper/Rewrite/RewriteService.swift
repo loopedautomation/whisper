@@ -1,5 +1,22 @@
 import Foundation
 
+/// Failures the provider layer can report in its own terms, rather than as an
+/// opaque `NSError` the UI has to guess at.
+enum RewriteError: LocalizedError, Equatable {
+    /// The model hit the output ceiling — whatever came back is incomplete.
+    case truncated
+    case invalidBaseURL(String)
+
+    var errorDescription: String? {
+        switch self {
+        case .truncated:
+            return "The rewrite came back incomplete (too long for one reply)."
+        case .invalidBaseURL(let url):
+            return "\"\(url)\" isn't a valid base URL."
+        }
+    }
+}
+
 /// Cleans up a raw transcript via an LLM (fix typos, punctuation,
 /// capitalization) while preserving meaning and honoring the vocabulary list.
 /// Resilient by design: any failure falls back to the raw transcript.
@@ -118,6 +135,31 @@ struct RewriteService {
         return p
     }
 
+    /// One-shot completion against the configured provider — the low-level call
+    /// underneath both the transcript cleanup above and the selection rewrite.
+    /// Returns the reply verbatim; callers do their own unwrapping.
+    /// Throws on transport or provider errors so the caller can report why.
+    static func complete(
+        system: String,
+        user: String,
+        provider: Provider,
+        model: String,
+        apiKey: String,
+        maxTokens: Int = 4096,
+        timeout: TimeInterval = 30
+    ) async throws -> String {
+        switch provider {
+        case .anthropic:
+            return try await anthropicCompletion(
+                system: system, user: user, model: model, apiKey: apiKey,
+                maxTokens: maxTokens, timeout: timeout)
+        case .openaiCompatible(let baseURL):
+            return try await openAICompletion(
+                system: system, user: user, baseURL: baseURL, model: model, apiKey: apiKey,
+                maxTokens: maxTokens, timeout: timeout)
+        }
+    }
+
     private static func session(_ timeout: TimeInterval) -> URLSession {
         let cfg = URLSessionConfiguration.ephemeral
         cfg.timeoutIntervalForRequest = timeout
@@ -127,53 +169,94 @@ struct RewriteService {
     // MARK: - Anthropic Messages API
 
     private static func callAnthropic(_ transcript: String, vocabulary: [String], config: Config, languageHint: [String]) async throws -> String {
+        let text = try await anthropicCompletion(
+            system: systemPrompt(vocabulary: vocabulary, languageHint: languageHint),
+            user: userMessage(transcript, template: config.promptTemplate),
+            model: config.model, apiKey: config.apiKey, maxTokens: 1024, timeout: config.timeout)
+        return clean(text, fallback: transcript)
+    }
+
+    private static func anthropicCompletion(
+        system: String, user: String, model: String, apiKey: String,
+        maxTokens: Int, timeout: TimeInterval
+    ) async throws -> String {
         var req = URLRequest(url: URL(string: "https://api.anthropic.com/v1/messages")!)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue(config.apiKey, forHTTPHeaderField: "x-api-key")
+        req.setValue(apiKey, forHTTPHeaderField: "x-api-key")
         req.setValue("2023-06-01", forHTTPHeaderField: "anthropic-version")
 
         let body: [String: Any] = [
-            "model": config.model,
-            "max_tokens": 1024,
-            "system": systemPrompt(vocabulary: vocabulary, languageHint: languageHint),
-            "messages": [["role": "user", "content": userMessage(transcript, template: config.promptTemplate)]]
+            "model": model,
+            "max_tokens": maxTokens,
+            "system": system,
+            "messages": [["role": "user", "content": user]]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await session(config.timeout).data(for: req)
+        let (data, resp) = try await session(timeout).data(for: req)
         try checkStatus(resp, data)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        // A reply cut off at the ceiling is a truncated passage. Pasting it
+        // would silently amputate the tail of the user's selection, so this has
+        // to fail loudly rather than return what arrived.
+        if json?["stop_reason"] as? String == "max_tokens" {
+            throw RewriteError.truncated
+        }
         let content = json?["content"] as? [[String: Any]]
-        let text = content?.compactMap { $0["text"] as? String }.joined() ?? ""
-        return clean(text, fallback: transcript)
+        return content?.compactMap { $0["text"] as? String }.joined() ?? ""
     }
 
     // MARK: - OpenAI-compatible Chat Completions API
 
     private static func callOpenAI(_ transcript: String, vocabulary: [String], baseURL: String, config: Config, languageHint: [String]) async throws -> String {
-        let url = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: "/")) + "/chat/completions")!
+        let text = try await openAICompletion(
+            system: systemPrompt(vocabulary: vocabulary, languageHint: languageHint),
+            user: userMessage(transcript, template: config.promptTemplate),
+            baseURL: baseURL, model: config.model, apiKey: config.apiKey,
+            maxTokens: 1024, timeout: config.timeout)
+        return clean(text, fallback: transcript)
+    }
+
+    private static func openAICompletion(
+        system: String, user: String, baseURL: String, model: String, apiKey: String,
+        maxTokens: Int, timeout: TimeInterval
+    ) async throws -> String {
+        // Free-text field in Settings, so this can be anything at all — a
+        // force-unwrap here crashes the whole app on a stray space.
+        guard let url = URL(string: baseURL.trimmingCharacters(in: CharacterSet(charactersIn: " /"))
+                                + "/chat/completions"),
+              url.scheme != nil, url.host != nil else {
+            throw RewriteError.invalidBaseURL(baseURL)
+        }
         var req = URLRequest(url: url)
         req.httpMethod = "POST"
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        req.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
+        // Locally-hosted servers (Ollama, LM Studio) take no key; sending an
+        // empty Bearer header makes some of them reject the request outright.
+        if !apiKey.isEmpty {
+            req.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        }
 
         let body: [String: Any] = [
-            "model": config.model,
+            "model": model,
+            "max_tokens": maxTokens,
             "messages": [
-                ["role": "system", "content": systemPrompt(vocabulary: vocabulary, languageHint: languageHint)],
-                ["role": "user", "content": userMessage(transcript, template: config.promptTemplate)]
+                ["role": "system", "content": system],
+                ["role": "user", "content": user]
             ]
         ]
         req.httpBody = try JSONSerialization.data(withJSONObject: body)
 
-        let (data, resp) = try await session(config.timeout).data(for: req)
+        let (data, resp) = try await session(timeout).data(for: req)
         try checkStatus(resp, data)
         let json = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let choices = json?["choices"] as? [[String: Any]]
+        if choices?.first?["finish_reason"] as? String == "length" {
+            throw RewriteError.truncated
+        }
         let message = choices?.first?["message"] as? [String: Any]
-        let text = message?["content"] as? String ?? ""
-        return clean(text, fallback: transcript)
+        return message?["content"] as? String ?? ""
     }
 
     private static func checkStatus(_ resp: URLResponse, _ data: Data) throws {
