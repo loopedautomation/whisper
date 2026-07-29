@@ -56,11 +56,19 @@ enum TextInserter {
 
     /// Synthesizes Cmd+V into the frontmost app.
     static func paste() {
-        let source = CGEventSource(stateID: .combinedSessionState)
-        let vKey = CGKeyCode(kVK_ANSI_V)
+        postCommandKey(CGKeyCode(kVK_ANSI_V))
+    }
 
-        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: true),
-              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: vKey, keyDown: false) else {
+    /// Synthesizes Cmd+C into the frontmost app. Used to lift the selection out
+    /// of another application, which is the only portable way to read it.
+    static func copy() {
+        postCommandKey(CGKeyCode(kVK_ANSI_C))
+    }
+
+    private static func postCommandKey(_ key: CGKeyCode) {
+        let source = CGEventSource(stateID: .combinedSessionState)
+        guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: true),
+              let keyUp = CGEvent(keyboardEventSource: source, virtualKey: key, keyDown: false) else {
             return
         }
         keyDown.flags = .maskCommand

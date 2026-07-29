@@ -20,6 +20,8 @@ struct SettingsView: View {
                 .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
             RewriteTab()
                 .tabItem { Label("Rewrite", systemImage: "wand.and.stars") }
+            StyleTab(style: coordinator.style, learner: coordinator.learner)
+                .tabItem { Label("Style", systemImage: "textformat") }
             PermissionsTab(permissions: coordinator.permissions)
                 .tabItem { Label("Permissions", systemImage: "lock.shield") }
             AboutTab(coordinator: coordinator)
@@ -349,6 +351,7 @@ private struct HotkeysTab: View {
             Form {
                 KeyboardShortcuts.Recorder("Push to talk (hold):", name: .pushToTalk)
                 KeyboardShortcuts.Recorder("Toggle recording:", name: .toggleRecording)
+                KeyboardShortcuts.Recorder("Rewrite selection (hold):", name: .rewriteSelection)
                 Toggle("Use the fn / Globe key", isOn: $fnEnabled)
                 Picker("fn action", selection: $fnMode) {
                     ForEach(FnMode.allCases) { Text($0.label).tag($0.rawValue) }
@@ -556,6 +559,211 @@ private struct RewriteTab: View {
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear { apiKey = storedKey }
+    }
+}
+
+// MARK: - Style (selection rewrite)
+
+/// Status and configuration for "rewrite my selection". The rules themselves
+/// live in a hand-edited `style.json`; this tab reports whether that file
+/// parsed, shows what's currently in force, and points at the model settings.
+private struct StyleTab: View {
+    @ObservedObject var style: StyleStore
+    @ObservedObject var learner: StyleLearner
+    @State private var learningEnabled = d.bool(forKey: PrefKey.styleLearningEnabled)
+    @State private var replacements: [String: String] = [:]
+    @State private var provider = d.string(forKey: PrefKey.selectionRewriteProvider)
+        ?? RewriteProvider.anthropic.rawValue
+    @State private var model = d.string(forKey: PrefKey.selectionRewriteModel) ?? "claude-opus-4-8"
+    @State private var baseURL = d.string(forKey: PrefKey.selectionRewriteBaseURL)
+        ?? "http://localhost:11434/v1"
+
+    private var isDirty: Bool {
+        provider != d.string(forKey: PrefKey.selectionRewriteProvider)
+        || model != d.string(forKey: PrefKey.selectionRewriteModel)
+        || baseURL != d.string(forKey: PrefKey.selectionRewriteBaseURL)
+    }
+
+    var body: some View {
+        ScrollView {
+            content.padding(.trailing, 4)
+        }
+        .frame(maxHeight: .infinity, alignment: .top)
+        .onAppear {
+            style.reload()
+            learner.refreshProposals(profile: style.profile)
+        }
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Select text in any app, hold the Rewrite shortcut, and say what you want. The selection is replaced in place.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            learningSection
+            Divider()
+
+            Form {
+                Picker("Provider", selection: $provider) {
+                    ForEach(RewriteProvider.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                if provider == RewriteProvider.openaiCompatible.rawValue {
+                    TextField("Base URL", text: $baseURL)
+                }
+                TextField("Model", text: $model)
+            }
+            .frame(height: provider == RewriteProvider.openaiCompatible.rawValue ? 88 : 60)
+
+            Text(provider == RewriteProvider.openaiCompatible.rawValue
+                 ? "Point this at a local server (Ollama, LM Studio) to keep your writing on this machine. The API key from the Rewrite tab is reused, and simply not sent when it's empty."
+                 : "Uses the API key from the Rewrite tab. Your selection is sent to Anthropic — switch to an OpenAI-compatible local server to keep it on this machine.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            Divider()
+
+            if let error = style.loadError {
+                // A broken config disables the feature outright rather than
+                // falling back to defaults — a rule you think is on but isn't
+                // is the failure you'd never notice.
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
+                Text("Rewriting is disabled until style.json parses.")
+                    .font(.caption).foregroundStyle(.secondary)
+            } else if let profile = style.profile {
+                Label("style.json loaded", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                let rules = SelectionRewriter.mechanicalRules(profile.enforced)
+                if rules.isEmpty {
+                    Text("No enforced rules set.").font(.caption).foregroundStyle(.secondary)
+                } else {
+                    Text("Enforced in code after every reply:")
+                        .font(.caption).foregroundStyle(.secondary)
+                    ForEach(rules, id: \.self) { rule in
+                        Text("• \(rule)").font(.caption.monospaced())
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+            }
+
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                Text(style.fileURL.path)
+                    .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                    .help(style.fileURL.path)
+                Spacer()
+                Button("Reload") { style.reload() }
+                Button("Reveal") { style.revealInFinder() }
+            }
+
+            Text("Note: rewriting works by copying the selection and pasting the result, so your clipboard ends up holding the rewrite.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
+            SaveBar(disabled: !isDirty) {
+                d.set(provider, forKey: PrefKey.selectionRewriteProvider)
+                d.set(model, forKey: PrefKey.selectionRewriteModel)
+                d.set(baseURL, forKey: PrefKey.selectionRewriteBaseURL)
+            }
+        }
+    }
+
+    // MARK: - learned style
+
+    /// Rewriting is never blocked on the corpus — this just reports honestly
+    /// which of the three states it's in, so "generic prose" is never mistaken
+    /// for "your voice".
+    private var learningSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: learner.readiness.symbolName)
+                    .foregroundStyle(learner.readiness == .matched ? .green : .secondary)
+                Text(learner.readiness.label).font(.headline)
+            }
+
+            switch learner.readiness {
+            case .generic:
+                Text("Rewrites run on style.json alone for now. Keep dictating and rewriting — your own writing is collected as you go.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .learning(let have, let need, let needsMoreVariety):
+                // Clamped: `have` can exceed `need` when there's plenty of
+                // writing but it's all the same shape, and ProgressView
+                // complains about an out-of-range value.
+                ProgressView(value: Double(min(have, need)), total: Double(need))
+                Text(needsMoreVariety
+                     ? "Plenty of samples, but they're all a similar length. Dictating short notes and rewriting longer passages both help."
+                     : "\(have) samples so far. Rewrites already use them where they fit the passage.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            case .matched:
+                Text("Samples matching each passage are sent with every rewrite, along with your recent edits.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 12) {
+                ForEach(StyleRegister.allCases, id: \.self) { register in
+                    Text("\(register.label): \(learner.corpus.sampleCount(in: register))")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+                if !learner.corpus.corrections.isEmpty {
+                    Text("edits: \(learner.corpus.corrections.count)")
+                        .font(.caption.monospaced()).foregroundStyle(.secondary)
+                }
+            }
+
+            if !learner.proposals.isEmpty { proposalList }
+
+            Toggle("Learn my style as I use it", isOn: $learningEnabled)
+                .onChange(of: learningEnabled) { _, new in
+                    d.set(new, forKey: PrefKey.styleLearningEnabled)
+                }
+            Text("Collects your dictation transcripts and the text you select, on this machine only. A few matching samples are sent with each rewrite — turning this off stops collection but keeps what's already learned.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Image(systemName: "doc.text")
+                Text(learner.fileURL.path)
+                    .font(.caption.monospaced()).lineLimit(1).truncationMode(.middle)
+                    .help(learner.fileURL.path)
+                Spacer()
+                Button("Reveal") { learner.revealInFinder() }
+                Button("Forget everything", role: .destructive) { learner.forgetEverything() }
+            }
+        }
+    }
+
+    /// Mined rules, offered for confirmation. Never applied on their own — a
+    /// rule that switched itself on is as bad as one that silently didn't.
+    private var proposalList: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Suggested rules").font(.subheadline.bold())
+            ForEach(learner.proposals) { proposal in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(proposal.title).font(.callout)
+                    Text(proposal.evidence).font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    HStack {
+                        if proposal.acceptsReplacement {
+                            // Supplying a replacement moves the rule from the
+                            // tier that costs a retry into the one fixed in code.
+                            TextField("replace with (optional)", text: Binding(
+                                get: { replacements[proposal.id] ?? "" },
+                                set: { replacements[proposal.id] = $0 }))
+                                .textFieldStyle(.roundedBorder).frame(maxWidth: 180)
+                        }
+                        Button("Add rule") {
+                            style.accept(proposal, replacement: replacements[proposal.id])
+                            learner.refreshProposals(profile: style.profile)
+                        }
+                        Button("No thanks") { learner.dismissProposal(proposal) }
+                            .buttonStyle(.link)
+                    }
+                }
+                .padding(8)
+                .background(RoundedRectangle(cornerRadius: 6).fill(.quaternary.opacity(0.4)))
+            }
+        }
     }
 }
 

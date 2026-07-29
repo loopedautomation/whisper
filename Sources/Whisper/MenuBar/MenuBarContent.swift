@@ -6,6 +6,7 @@ struct MenuBarContent: View {
     @ObservedObject private var audioDevices: AudioDeviceManager
     @ObservedObject private var models: ModelManager
     @ObservedObject private var updates: UpdateChecker
+    @ObservedObject private var learner: StyleLearner
     @Environment(\.openSettings) private var openSettings
 
     init(coordinator: Coordinator) {
@@ -14,6 +15,7 @@ struct MenuBarContent: View {
         self.audioDevices = coordinator.audioDevices
         self.models = coordinator.models
         self.updates = coordinator.updateChecker
+        self.learner = coordinator.learner
     }
 
     var body: some View {
@@ -36,6 +38,17 @@ struct MenuBarContent: View {
         Button(state.isRecording ? "Stop Recording" : "Start Recording") {
             coordinator.toggleRecording()
         }
+
+        // Typed-instruction path — the same rewrite pipeline as the hotkey,
+        // minus the microphone.
+        Button("Rewrite Selection…") {
+            coordinator.promptForTypedRewrite()
+        }
+        .disabled(state.isRecording || state.isBusy)
+
+        // Rewriting always works; this says honestly whether it's matching your
+        // voice yet or still running on generic prose.
+        Text(learner.readiness.label)
 
         Picker("Microphone", selection: $audioDevices.selectedUID) {
             Text("System Default").tag(AudioInputDevices.systemDefaultUID)

@@ -18,6 +18,13 @@ enum PrefKey {
     static let language = "language"                       // legacy single-language hint, "" = auto
     static let preferredLanguages = "preferredLanguages"   // comma-joined ISO codes; empty = auto-detect all
     static let languageRepairEnabled = "languageRepairEnabled"   // opt-in: AI-repair cross-language mixups (sends transcript to your Rewrite provider); off by default to stay fully local
+    // Selection rewrite ("rewrite my selection"): copy the selection, speak an
+    // instruction, paste the rewrite back in place.
+    static let selectionRewriteModel = "selectionRewriteModel"
+    static let selectionRewriteProvider = "selectionRewriteProvider"   // "anthropic" | "openaiCompatible"
+    static let selectionRewriteBaseURL = "selectionRewriteBaseURL"     // for openaiCompatible (e.g. a local model)
+    static let styleLearningEnabled = "styleLearningEnabled"           // harvest your writing to match your voice over time
+    static let dismissedStyleProposals = "dismissedStyleProposals"     // mined rules the user has declined
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
     static let soundVolume = "soundVolume"                // 0.0...1.0
@@ -173,6 +180,11 @@ enum DefaultPref {
             PrefKey.rewriteModel: "claude-haiku-4-5-20251001",
             PrefKey.rewriteBaseURL: "https://api.openai.com/v1",
             PrefKey.rewritePrompt: DefaultPref.rewritePromptTemplate,
+            PrefKey.selectionRewriteProvider: RewriteProvider.anthropic.rawValue,
+            PrefKey.selectionRewriteModel: "claude-opus-4-8",
+            PrefKey.selectionRewriteBaseURL: "http://localhost:11434/v1",   // Ollama's default
+            PrefKey.styleLearningEnabled: true,
+
             PrefKey.language: "en",
             PrefKey.preferredLanguages: "en",   // preserve today's English default; deselect for auto
             PrefKey.inputDeviceUID: ""   // follow system default
