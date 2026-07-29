@@ -532,6 +532,14 @@ private struct RewriteTab: View {
         || apiKey != storedKey
     }
 
+    private var rewriteFormHeight: CGFloat {
+        switch RewriteProvider(rawValue: provider) ?? .anthropic {
+        case .appleOnDevice: return 60
+        case .openaiCompatible: return 150
+        case .anthropic: return 122
+        }
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             Form {
@@ -539,13 +547,18 @@ private struct RewriteTab: View {
                 Picker("Provider", selection: $provider) {
                     ForEach(RewriteProvider.allCases) { Text($0.label).tag($0.rawValue) }
                 }
-                if provider == RewriteProvider.openaiCompatible.rawValue {
-                    TextField("Base URL", text: $baseURL)
+                // The on-device model has nothing to configure — showing empty
+                // Model and API key boxes reads as "something is missing".
+                if provider != RewriteProvider.appleOnDevice.rawValue {
+                    if provider == RewriteProvider.openaiCompatible.rawValue {
+                        TextField("Base URL", text: $baseURL)
+                    }
+                    TextField("Model", text: $model)
+                    SecureField("API key (stored in Keychain)", text: $apiKey)
                 }
-                TextField("Model", text: $model)
-                SecureField("API key (stored in Keychain)", text: $apiKey)
             }
-            .frame(height: provider == RewriteProvider.openaiCompatible.rawValue ? 150 : 122)
+            .frame(height: rewriteFormHeight)
+
             .onChange(of: provider) { old, new in
                 // Switching providers swaps in that provider's default model,
                 // unless the user has typed a custom one.
@@ -553,6 +566,19 @@ private struct RewriteTab: View {
                       let newProvider = RewriteProvider(rawValue: new),
                       model == oldProvider.defaultModel || model.isEmpty else { return }
                 model = newProvider.defaultModel
+            }
+            if provider == RewriteProvider.appleOnDevice.rawValue {
+                let state = OnDeviceModelClient.availability()
+                HStack(spacing: 6) {
+                    Image(systemName: state.isAvailable
+                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                        .foregroundStyle(state.isAvailable ? .green : .orange)
+                    Text(state.summary)
+                    if let recovery = state.recovery {
+                        Text("— \(recovery)").foregroundStyle(.secondary)
+                    }
+                }
+                .font(.caption).fixedSize(horizontal: false, vertical: true)
             }
 
             Text("User prompt — `{{input}}` is replaced with the transcript. Vocabulary and guardrails are added automatically via the system prompt.")
