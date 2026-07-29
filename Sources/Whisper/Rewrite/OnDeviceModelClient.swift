@@ -121,9 +121,8 @@ enum OnDeviceModelClient {
         // The context window covers instructions + prompt + reply together, so
         // the reply budget is whatever is left after the passage. Checked up
         // front: a rewrite that dies partway is worse than one that never ran.
-        let context = SystemLanguageModel.default.contextSize
         let budget = try replyBudget(system: system, user: user,
-                                     requested: maxTokens, contextSize: context)
+                                     requested: maxTokens, contextSize: contextSize)
 
         let response: LanguageModelSession.Response<String>
         do {
@@ -172,6 +171,16 @@ enum OnDeviceModelClient {
     #endif
 
     // MARK: - budgeting
+
+    /// The on-device model's context window, which Apple documents as 4,096
+    /// tokens for instructions + prompt + reply combined.
+    ///
+    /// Hardcoded rather than read from `SystemLanguageModel.contextSize`: that
+    /// property only appeared in the 26.4 SDK, and a missing declaration is a
+    /// compile error no availability guard can rescue — so reading it would
+    /// break the build on any slightly older Xcode. Under-reading a future,
+    /// larger window costs nothing but unused headroom.
+    static let contextSize = 4096
 
     /// Rough token estimate. Deliberately pessimistic (a low chars-per-token
     /// ratio over-counts), because over-counting costs a "too long" error while
