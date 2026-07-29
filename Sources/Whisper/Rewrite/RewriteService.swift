@@ -6,6 +6,15 @@ enum RewriteError: LocalizedError, Equatable {
     /// The model hit the output ceiling — whatever came back is incomplete.
     case truncated
     case invalidBaseURL(String)
+    /// Apple's on-device model isn't usable right now.
+    case onDeviceUnavailable(OnDeviceAvailability)
+    /// The passage doesn't fit the on-device model's context window.
+    case selectionTooLong
+    /// The on-device model declined to rewrite this text.
+    case onDeviceDeclined
+    case onDeviceUnsupportedLanguage
+    case onDeviceRateLimited
+    case onDeviceFailed(String)
 
     var errorDescription: String? {
         switch self {
@@ -13,6 +22,18 @@ enum RewriteError: LocalizedError, Equatable {
             return "The rewrite came back incomplete (too long for one reply)."
         case .invalidBaseURL(let url):
             return "\"\(url)\" isn't a valid base URL."
+        case .onDeviceUnavailable(let state):
+            return "The on-device model isn't available: \(state.summary.lowercased())."
+        case .selectionTooLong:
+            return "That selection is too long for the on-device model."
+        case .onDeviceDeclined:
+            return "The on-device model declined to rewrite this text."
+        case .onDeviceUnsupportedLanguage:
+            return "The on-device model doesn't support this language."
+        case .onDeviceRateLimited:
+            return "The on-device model is busy — try again in a moment."
+        case .onDeviceFailed(let detail):
+            return "The on-device rewrite failed: \(detail)"
         }
     }
 }
@@ -29,6 +50,8 @@ struct RewriteService {
     enum Provider {
         case anthropic
         case openaiCompatible(baseURL: String)
+        /// Apple's model, built into macOS. No key, no server, no network.
+        case appleOnDevice
     }
 
     struct Config {
@@ -70,7 +93,8 @@ struct RewriteService {
     /// network/timeout, provider error) so the UI can tell the user.
     static func rewriteResult(_ transcript: String, vocabulary: [String], config: Config, languageHint: [String] = []) async -> Outcome {
         guard !transcript.isEmpty else { return Outcome(text: transcript, failure: nil) }
-        guard !config.apiKey.isEmpty else {
+        // A local model needs no key; only the HTTP providers do.
+        if case .appleOnDevice = config.provider {} else if config.apiKey.isEmpty {
             return Outcome(text: transcript, failure: "No AI API key configured.")
         }
         do {
@@ -80,6 +104,12 @@ struct RewriteService {
                 cleaned = try await callAnthropic(transcript, vocabulary: vocabulary, config: config, languageHint: languageHint)
             case .openaiCompatible(let baseURL):
                 cleaned = try await callOpenAI(transcript, vocabulary: vocabulary, baseURL: baseURL, config: config, languageHint: languageHint)
+            case .appleOnDevice:
+                let text = try await OnDeviceModelClient.complete(
+                    system: systemPrompt(vocabulary: vocabulary, languageHint: languageHint),
+                    user: userMessage(transcript, template: config.promptTemplate),
+                    maxTokens: 1024)
+                cleaned = clean(text, fallback: transcript)
             }
             return Outcome(text: cleaned, failure: nil)
         } catch {
@@ -157,6 +187,10 @@ struct RewriteService {
             return try await openAICompletion(
                 system: system, user: user, baseURL: baseURL, model: model, apiKey: apiKey,
                 maxTokens: maxTokens, timeout: timeout)
+        case .appleOnDevice:
+            // Runs in-process — `model`, `apiKey` and `timeout` don't apply.
+            return try await OnDeviceModelClient.complete(
+                system: system, user: user, maxTokens: maxTokens)
         }
     }
 
