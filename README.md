@@ -36,6 +36,8 @@ transcribed text is copied to the clipboard and pasted at your cursor.
   own writing style. See [Rewrite my selection](#rewrite-my-selection).
 - 🎯 **Learns your voice** — picks up how you write from your dictation and your
   edits, and suggests style rules once the evidence is there. Stays local.
+- 🎚️ **Style templates** — separate voices for email, Slack, docs; pick one by
+  saying "style it as an email".
 - 🔒 Launch at login, menu-bar agent (no Dock icon).
 
 ## Install
@@ -150,6 +152,55 @@ Edit it once at `~/Library/Application Support/Looped Whisper/style.json`
 instead of `bannedWords` refuses to load and tells you which key it didn't
 recognize (with the nearest match). Rewriting stays disabled until the file
 parses — a rule you believe is on but isn't is the failure you'd never catch.
+
+### Style templates
+
+One voice rarely fits everything you write. `style.json` can hold named
+templates alongside the base profile:
+
+```jsonc
+{
+  "voice": { "description": "Terse. No hedging." },
+  "enforced": { "bannedWords": [{ "word": "delve" }] },
+
+  "templates": {
+    "email":  {
+      "voice": { "description": "Warmer, still direct." },
+      "enforced": { "maxWords": 200 }
+    },
+    "slack":  {
+      "voice": { "description": "Lowercase, quick, no sign-off." },
+      "enforced": { "maxWords": 60 }
+    }
+  },
+
+  "defaultTemplate": null
+}
+```
+
+Name one while you speak — *"style it as an email"*, *"make it shorter as a
+slack message"* — or set `defaultTemplate` (or the picker in **Settings →
+Style**) so one applies whenever you don't say otherwise. An unrecognized name
+falls back to the base rather than failing, since a misheard word shouldn't cost
+you the rewrite.
+
+**Templates add to the base; they don't replace it.** Lists merge, single values
+override:
+
+| In a template | Effect |
+| --- | --- |
+| `guidance`, `substitutions`, `bannedWords` | **Added** to the base — a word you never use stays banned everywhere |
+| `voice.description`, `maxWords`, `straightenQuotes` | **Replaces** the base value |
+| `voice.samples` | **Replaces** — a template's voice is its own, not the base voice with extras |
+
+So a base ban on "delve" holds inside every template, while the email template
+adds its own 200-word limit on top. A template can also switch a base rule off:
+`"straightenQuotes": false`.
+
+Strictness reaches inside templates too. A typo in `templates.email.enforced`
+is the same hard error it would be at the top level, and pointing
+`defaultTemplate` at a template that doesn't exist is rejected rather than
+silently falling back.
 
 ### Prompted vs. enforced
 

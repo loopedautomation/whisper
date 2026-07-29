@@ -397,3 +397,175 @@ final class ResolvedStyleTests: XCTestCase {
         XCTAssertTrue(prompt.contains("Never invent facts"))
     }
 }
+
+/// Fixture with a base profile and two templates, exercising both merge rules.
+private let templatedConfig = """
+{
+  "voice": { "description": "Terse.", "samples": ["Base sample."] },
+  "prompted": { "guidance": ["Lead with the point."] },
+  "enforced": {
+    "bannedWords": [{ "word": "delve" }],
+    "straightenQuotes": true,
+    "maxWords": 500
+  },
+  "templates": {
+    "email": {
+      "voice": { "description": "Warmer, still brief." },
+      "prompted": { "guidance": ["Open with the ask."] },
+      "enforced": { "maxWords": 150, "bannedWords": [{ "word": "circle back" }] }
+    },
+    "slack": {
+      "voice": { "samples": ["yeah that works, shipping it now"] },
+      "enforced": { "straightenQuotes": false }
+    }
+  },
+  "defaultTemplate": "email"
+}
+"""
+
+final class StyleConfigTests: XCTestCase {
+
+    private func config(_ json: String = templatedConfig) throws -> StyleConfig {
+        try StyleConfig.decode(Data(json.utf8))
+    }
+
+    /// A file with no templates is exactly what every existing config is, and
+    /// must keep working untouched.
+    func testConfigWithoutTemplatesIsJustTheBase() throws {
+        let c = try config("""
+        { "voice": { "description": "Terse." }, "enforced": { "maxWords": 200 } }
+        """)
+        XCTAssertTrue(c.templateNames.isEmpty)
+        XCTAssertNil(c.defaultTemplate)
+        XCTAssertEqual(c.defaultProfile.voice.description, "Terse.")
+        XCTAssertEqual(c.defaultProfile.enforced.maxWords, 200)
+    }
+
+    /// The merge rule: lists add to the base, scalars replace it. A word banned
+    /// at the base stays banned inside every template.
+    func testTemplateAddsToListsAndOverridesScalars() throws {
+        let email = try config().profile(named: "email")
+
+        // Scalars replaced.
+        XCTAssertEqual(email.voice.description, "Warmer, still brief.")
+        XCTAssertEqual(email.enforced.maxWords, 150)
+        // Lists added to — the base rule survives alongside the template's.
+        XCTAssertEqual(email.prompted.guidance, ["Lead with the point.", "Open with the ask."])
+        XCTAssertEqual(email.enforced.bannedWords.map(\.word), ["delve", "circle back"])
+        // Untouched by this template, so inherited.
+        XCTAssertEqual(email.voice.samples, ["Base sample."])
+        XCTAssertTrue(email.enforced.straightenQuotes)
+    }
+
+    /// A template can turn a base rule off, not just add to it.
+    func testTemplateCanDisableABaseRule() throws {
+        XCTAssertFalse(try config().profile(named: "slack").enforced.straightenQuotes)
+    }
+
+    /// Samples are replaced rather than appended — a template's voice is its
+    /// own, not the base voice with extras.
+    func testTemplateSamplesReplaceRatherThanAppend() throws {
+        XCTAssertEqual(try config().profile(named: "slack").voice.samples,
+                       ["yeah that works, shipping it now"])
+    }
+
+    func testDefaultTemplateIsApplied() throws {
+        XCTAssertEqual(try config().defaultProfile.enforced.maxWords, 150)
+    }
+
+    /// A misheard template name shouldn't cost the user their rewrite.
+    func testUnknownTemplateFallsBackToTheBase() throws {
+        XCTAssertEqual(try config().profile(named: "carrier pigeon").enforced.maxWords, 500)
+    }
+
+    func testTemplateLookupIsCaseInsensitive() throws {
+        XCTAssertEqual(try config().profile(named: "EMAIL").enforced.maxWords, 150)
+    }
+
+    /// Strictness has to reach inside templates too, or a typo there is exactly
+    /// the silently-inactive rule the whole config refuses to have.
+    func testTypoInsideATemplateIsAHardError() {
+        XCTAssertThrowsError(try config("""
+        { "templates": { "email": { "enforced": { "maxWord": 150 } } } }
+        """)) { error in
+            guard case StyleProfileError.unknownKey(let path, let suggestion) = error else {
+                return XCTFail("expected unknownKey, got \(error)")
+            }
+            XCTAssertEqual(path, "templates.email.enforced.maxWord")
+            XCTAssertEqual(suggestion, "maxWords")
+        }
+    }
+
+    /// Pointing the default at a template that doesn't exist would silently use
+    /// the base instead — the same class of failure as a misspelled rule.
+    func testDefaultNamingAMissingTemplateIsRejected() {
+        XCTAssertThrowsError(try config("""
+        { "templates": { "email": {} }, "defaultTemplate": "slack" }
+        """)) { error in
+            guard case StyleProfileError.invalidValue(let path, _) = error else {
+                return XCTFail("expected invalidValue, got \(error)")
+            }
+            XCTAssertEqual(path, "defaultTemplate")
+        }
+    }
+
+    /// Accepting a mined rule rewrites the file, so templates must survive it.
+    func testTemplatesSurviveARoundTrip() throws {
+        let reloaded = try StyleConfig.decode(try config().encoded())
+        XCTAssertEqual(reloaded.templateNames, ["email", "slack"])
+        XCTAssertEqual(reloaded.defaultTemplate, "email")
+        XCTAssertEqual(reloaded.profile(named: "email").enforced.maxWords, 150)
+        XCTAssertFalse(reloaded.profile(named: "slack").enforced.straightenQuotes)
+        XCTAssertEqual(reloaded.base.enforced.maxWords, 500)
+    }
+
+    /// Template order must be stable, or the Settings picker reshuffles between
+    /// launches — JSON objects have no inherent ordering.
+    func testTemplateOrderIsStable() throws {
+        XCTAssertEqual(try config().templateNames, try config().templateNames)
+        XCTAssertEqual(try config().templateNames, ["email", "slack"])
+    }
+}
+
+final class TemplateCommandTests: XCTestCase {
+
+    private let templates = ["email", "slack", "formal email"]
+
+    /// Naming a template picks it for one rewrite, and the rest of the command
+    /// still reads as an instruction.
+    func testTemplateIsExtractedAndInstructionSurvives() {
+        let command = CommandNormalizer.normalize("make it shorter as an email",
+                                                  templates: templates)
+        XCTAssertEqual(command.template, "email")
+        XCTAssertEqual(command.intent, .shorten)
+    }
+
+    /// "style it" on its own is a plain rewrite under the default template.
+    func testStyleItIsARewriteWithNoTemplate() {
+        let command = CommandNormalizer.normalize("style it", templates: templates)
+        XCTAssertNil(command.template)
+        XCTAssertEqual(command.intent, .rewrite)
+    }
+
+    func testStyleItAsATemplate() {
+        let command = CommandNormalizer.normalize("style it as a slack message",
+                                                  templates: templates)
+        XCTAssertEqual(command.template, "slack")
+    }
+
+    /// The longer name has to win, or "formal email" would match "email" and
+    /// silently pick the wrong template.
+    func testLongestTemplateNameWins() {
+        XCTAssertEqual(
+            CommandNormalizer.normalize("as a formal email", templates: templates).template,
+            "formal email")
+    }
+
+    /// No templates configured means nothing to extract — the words stay part
+    /// of the instruction.
+    func testNoTemplatesConfiguredLeavesTheCommandAlone() {
+        let command = CommandNormalizer.normalize("make it shorter as an email", templates: [])
+        XCTAssertNil(command.template)
+        XCTAssertEqual(command.intent, .shorten)
+    }
+}

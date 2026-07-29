@@ -77,7 +77,7 @@ extension StyleProfile {
     /// Every rule the config understands, as a tree. Used to reject unknown
     /// keys before decoding — a rule the user believes is on but isn't is the
     /// failure they'd never catch, so a typo has to be loud.
-    private static let schema: JSONSchema = .object([
+    static let schema: JSONSchema = .object([
         "voice": .object([
             "description": .scalar,
             "samples": .array(.scalar)
@@ -107,7 +107,11 @@ extension StyleProfile {
             throw StyleProfileError.notAnObject
         }
         try schema.validate(object, at: [])
+        return try build(from: object)
+    }
 
+    /// Builds a profile from an already-validated document.
+    static func build(from object: [String: Any]) throws -> StyleProfile {
         var profile = StyleProfile()
         if let voice = object["voice"] as? [String: Any] {
             profile.voice.description = try string(voice["description"], at: "voice.description") ?? ""
@@ -122,7 +126,7 @@ extension StyleProfile {
         return profile
     }
 
-    private static func decodeEnforced(_ o: [String: Any]) throws -> Enforced {
+    static func decodeEnforced(_ o: [String: Any]) throws -> Enforced {
         var e = Enforced()
 
         for (index, raw) in try array(o["substitutions"], at: "enforced.substitutions").enumerated() {
@@ -178,19 +182,19 @@ extension StyleProfile {
         return e
     }
 
-    private static func string(_ value: Any?, at path: String) throws -> String? {
+    static func string(_ value: Any?, at path: String) throws -> String? {
         guard let value, !(value is NSNull) else { return nil }
         guard let s = value as? String else { throw StyleProfileError.wrongType(path, expected: "string") }
         return s
     }
 
-    private static func array(_ value: Any?, at path: String) throws -> [Any] {
+    static func array(_ value: Any?, at path: String) throws -> [Any] {
         guard let value, !(value is NSNull) else { return [] }
         guard let a = value as? [Any] else { throw StyleProfileError.wrongType(path, expected: "array") }
         return a
     }
 
-    private static func strings(_ value: Any?, at path: String) throws -> [String] {
+    static func strings(_ value: Any?, at path: String) throws -> [String] {
         try array(value, at: path).enumerated().map { index, element in
             guard let s = element as? String else {
                 throw StyleProfileError.wrongType("\(path)[\(index)]", expected: "string")
@@ -298,9 +302,12 @@ enum StyleProfileError: Error, Equatable, CustomStringConvertible {
 // MARK: - schema walking
 
 /// Minimal shape description, just enough to reject unknown keys with a path.
-private indirect enum JSONSchema {
+indirect enum JSONSchema {
     case object([String: JSONSchema])
     case array(JSONSchema)
+    /// An object whose *keys* are user-chosen (template names), with every
+    /// value matching the same shape.
+    case dictionary(JSONSchema)
     case scalar
 
     func validate(_ value: Any, at path: [String]) throws {
@@ -318,6 +325,13 @@ private indirect enum JSONSchema {
             }
             for (index, item) in items.enumerated() {
                 try element.validate(item, at: path + ["[\(index)]"])
+            }
+        case .dictionary(let element):
+            guard let dict = value as? [String: Any] else {
+                throw StyleProfileError.wrongType(JSONSchema.render(path), expected: "object")
+            }
+            for (key, child) in dict {
+                try element.validate(child, at: path + [key])
             }
         case .object(let fields):
             guard let dict = value as? [String: Any] else {

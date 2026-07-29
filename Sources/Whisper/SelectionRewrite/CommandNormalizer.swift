@@ -50,14 +50,43 @@ enum CommandNormalizer {
     struct Command: Equatable {
         /// Exactly what was transcribed (or typed).
         var raw: String
-        /// The transcript with filler and politeness removed.
+        /// The transcript with filler, politeness and any template name removed.
         var cleaned: String
         var intent: RewriteIntent
+        /// A style template the user named ("as an email"), if any. `nil` means
+        /// "use whatever the default is".
+        var template: String?
     }
 
-    static func normalize(_ transcript: String) -> Command {
-        let cleaned = clean(transcript)
-        return Command(raw: transcript, cleaned: cleaned, intent: intent(for: cleaned))
+    /// `templates` are the names configured in `style.json`; naming one in the
+    /// command picks it for this rewrite. Template selection is orthogonal to
+    /// intent — "make it shorter as a slack message" is both.
+    static func normalize(_ transcript: String, templates: [String] = []) -> Command {
+        var cleaned = clean(transcript)
+        let template = extractTemplate(from: &cleaned, templates: templates)
+        return Command(raw: transcript, cleaned: cleaned,
+                       intent: intent(for: cleaned), template: template)
+    }
+
+    /// Finds a template name in the command and removes it, along with the
+    /// connective words around it, so what's left is a clean instruction.
+    ///
+    /// Longest name first: with templates "email" and "formal email", the
+    /// longer one must win or "as a formal email" would match the shorter.
+    private static func extractTemplate(from cleaned: inout String, templates: [String]) -> String? {
+        let padded = " \(cleaned) "
+        for name in templates.sorted(by: { $0.count > $1.count }) {
+            let needle = " \(name.lowercased()) "
+            guard padded.contains(needle) else { continue }
+            var remainder = padded.replacingOccurrences(of: needle, with: " ")
+            for connective in [" as a ", " as an ", " as the ", " as ", " in ", " style ", " like a ", " like an "] {
+                remainder = remainder.replacingOccurrences(of: connective, with: " ")
+            }
+            cleaned = remainder.split(separator: " ").joined(separator: " ")
+                .trimmingCharacters(in: .whitespaces)
+            return name
+        }
+        return nil
     }
 
     // MARK: - cleaning
@@ -161,7 +190,8 @@ enum CommandNormalizer {
                       "business-like", "businesslike"]),
         (.casualize, ["more casual", "casual", "informal", "friendlier", "friendly",
                       "conversational", "relaxed"]),
-        (.rewrite, ["rewrite", "reword", "rephrase", "redo", "clean it up", "clean up",
+        (.rewrite, ["style it", "style this", "style", "rewrite", "reword", "rephrase", "redo",
+                    "clean it up", "clean up",
                     "tidy up", "tidy it up", "improve", "better", "fix it up", "polish it"])
     ]
 

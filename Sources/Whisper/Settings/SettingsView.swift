@@ -855,10 +855,22 @@ private struct StyleTab: View {
                     .foregroundStyle(.red).fixedSize(horizontal: false, vertical: true)
                 Text("Rewriting is disabled until style.json parses.")
                     .font(.caption).foregroundStyle(.secondary)
-            } else if let profile = style.profile {
+            } else if let config = style.config {
                 Label("style.json loaded", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
-                let rules = SelectionRewriter.mechanicalRules(profile.enforced)
+
+                if !config.templateNames.isEmpty {
+                    Picker("Default template", selection: defaultTemplateBinding) {
+                        Text(StyleConfig.baseName).tag("")
+                        ForEach(config.templateNames, id: \.self) { Text($0).tag($0) }
+                    }
+                    .pickerStyle(.menu).frame(maxWidth: 320)
+                    Text("Used when you don't name one. Say \"style it as \(config.templateNames[0].lowercased())\" to pick a different one for a single rewrite.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                let rules = SelectionRewriter.mechanicalRules(config.defaultProfile.enforced)
                 if rules.isEmpty {
                     Text("No enforced rules set.").font(.caption).foregroundStyle(.secondary)
                 } else {
@@ -890,6 +902,15 @@ private struct StyleTab: View {
                 d.set(baseURL, forKey: PrefKey.selectionRewriteBaseURL)
             }
         }
+    }
+
+    /// Writes the chosen default straight back into style.json — the file is
+    /// the source of truth, so a picker that only changed a preference would
+    /// disagree with what the user reads there.
+    private var defaultTemplateBinding: Binding<String> {
+        Binding(
+            get: { style.config?.defaultTemplate ?? "" },
+            set: { style.setDefaultTemplate($0.isEmpty ? nil : $0) })
     }
 
     private var providerFormHeight: CGFloat {
