@@ -835,3 +835,50 @@ final class LocalizedCommandTests: XCTestCase {
         XCTAssertEqual(CommandNormalizer.normalize("fix the typos").intent, .fixTypos)
     }
 }
+
+final class OutputLanguageTests: XCTestCase {
+
+    private var emptyProfile: StyleProfile {
+        StyleProfile(voice: .init(), prompted: .init(), enforced: .init())
+    }
+
+    /// The instruction handed to the model is always English, whatever the user
+    /// selected. Without an explicit rule, a German passage can come back
+    /// rewritten *into* English — so the rule is unconditional.
+    func testPromptAlwaysForbidsTranslation() {
+        let prompt = SelectionRewriter.systemPrompt(style: ResolvedStyle(profile: emptyProfile))
+        XCTAssertTrue(prompt.contains("SAME LANGUAGE"))
+        XCTAssertTrue(prompt.contains("Never translate"))
+    }
+
+    /// When the language is known, name it — belt as well as braces, because a
+    /// small model needs the stronger signal.
+    func testKnownLanguageIsNamedExplicitly() {
+        let prompt = SelectionRewriter.systemPrompt(
+            style: ResolvedStyle(profile: emptyProfile, language: "de"))
+        XCTAssertTrue(prompt.contains("German"), "prompt should name the language: \(prompt)")
+    }
+
+    /// An undetectable passage still gets the unconditional rule, just without
+    /// a name — which is why the rule can't be conditional on detection.
+    func testUnknownLanguageStillGetsTheRule() {
+        let prompt = SelectionRewriter.systemPrompt(style: ResolvedStyle(profile: emptyProfile))
+        XCTAssertTrue(prompt.contains("SAME LANGUAGE"))
+        XCTAssertFalse(prompt.contains("The passage is written in"))
+    }
+
+    /// The command's language is irrelevant to the style chosen — an English
+    /// "style it" over a German selection must still resolve German.
+    func testEnglishCommandOverForeignTextKeepsThatLanguage() {
+        var corpus = StyleCorpus()
+        for (i, text) in germanSamples.enumerated() {
+            corpus.addSample(text, source: .written, at: day(i))
+        }
+        // Retrieval keys off the passage, not the instruction.
+        let retrieved = corpus.samples(for: germanSamples[0])
+        XCTAssertFalse(retrieved.isEmpty)
+        XCTAssertTrue(retrieved.allSatisfy { $0.language == "de" })
+        // And an English command is still understood as a plain rewrite.
+        XCTAssertEqual(CommandNormalizer.normalize("style it").intent, .rewrite)
+    }
+}

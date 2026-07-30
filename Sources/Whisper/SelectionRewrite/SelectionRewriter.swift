@@ -92,8 +92,19 @@ struct SelectionRewriter {
             - Preserve the original meaning unless the instruction explicitly asks you to change it.
             - Return ONLY the rewritten passage. No preamble, no explanation, no code fences, \
             no surrounding quotation marks, no sign-off.
+            - Write the rewrite in the SAME LANGUAGE as the passage. Never translate it. The \
+            instruction below is written in English whatever language the passage is in, and is \
+            not a request to change languages.
             """
         ]
+
+        // Naming the language explicitly, on top of the rule above, because a
+        // smaller model given an English instruction around non-English content
+        // will otherwise sometimes answer in English.
+        if let language = style.language {
+            let name = LanguageDetector.displayName(language)
+            parts.append("The passage is written in \(name). Your rewrite must also be in \(name).")
+        }
 
         if !profile.voice.description.isEmpty {
             parts.append("How the user writes:\n\(profile.voice.description)")

@@ -83,11 +83,13 @@ final class StyleLearner: ObservableObject {
         // Readiness reported for *this passage's* language, not the corpus at
         // large: rewriting German with an English-only corpus is generic, and
         // saying otherwise would claim a voice match that isn't happening.
-        ResolvedStyle(
+        let language = LanguageDetector.detect(passage)
+        return ResolvedStyle(
             profile: profile,
             learnedSamples: corpus.samples(for: passage).map(\.text),
             corrections: corpus.recentCorrections(),
-            readiness: corpus.readiness(in: LanguageDetector.detect(passage)))
+            readiness: corpus.readiness(in: language),
+            language: language)
     }
 
     /// Readiness for a specific language, for the Settings breakdown.
@@ -178,16 +180,23 @@ struct ResolvedStyle: Equatable {
     var learnedSamples: [String] = []
     var corrections: [CorrectionPair] = []
     var readiness: StyleReadiness = .generic
+    /// The passage's language, when it could be determined. Used to pin the
+    /// reply's language — the instruction handed to the model is in English
+    /// regardless of what the user selected, so without this a German passage
+    /// can come back rewritten *into* English.
+    var language: String?
 
     /// A profile with no learned material — what a rewrite looks like on day
     /// one, and what the tests use when they only care about enforcement.
     init(profile: StyleProfile,
          learnedSamples: [String] = [],
          corrections: [CorrectionPair] = [],
-         readiness: StyleReadiness = .generic) {
+         readiness: StyleReadiness = .generic,
+         language: String? = nil) {
         self.profile = profile
         self.learnedSamples = learnedSamples
         self.corrections = corrections
         self.readiness = readiness
+        self.language = language
     }
 }
