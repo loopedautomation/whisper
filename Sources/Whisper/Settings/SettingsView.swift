@@ -18,8 +18,8 @@ struct SettingsView: View {
                 .tabItem { Label("Sounds", systemImage: "speaker.wave.2") }
             VocabularyTab(vocabulary: coordinator.vocabulary)
                 .tabItem { Label("Vocabulary", systemImage: "character.book.closed") }
-            RewriteTab()
-                .tabItem { Label("Rewrite", systemImage: "wand.and.stars") }
+            AITab()
+                .tabItem { Label("AI", systemImage: "wand.and.stars") }
             ActionsTab(store: coordinator.quickActions)
                 .tabItem { Label("Actions", systemImage: "bolt") }
             StyleTab(style: coordinator.style, learner: coordinator.learner)
@@ -236,7 +236,7 @@ private struct ModelTab: View {
                         Toggle("Fix cross-language mix-ups with AI", isOn: $languageRepairEnabled)
                             .toggleStyle(.checkbox)
                         Text(languageRepairEnabled
-                             ? "Sends the transcript to your Rewrite provider (Settings → Rewrite) to repair words transcribed in the wrong language, e.g. mid-sentence switches. Not applied during realtime incremental typing."
+                             ? "Sends the transcript to your AI provider (Settings → AI) to repair words transcribed in the wrong language, e.g. mid-sentence switches. Not applied during realtime incremental typing."
                              : "Off — mid-sentence language switches may come out garbled. Turning this on sends the transcript to your Rewrite provider to repair it; the app stays fully local otherwise.")
                             .font(.caption).foregroundStyle(.secondary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -536,38 +536,39 @@ private struct VocabularyTab: View {
     private func add() { vocabulary.add(newTerm); newTerm = "" }
 }
 
-// MARK: - Rewrite
+// MARK: - AI
 
-private struct RewriteTab: View {
-    @State private var enabled = d.bool(forKey: PrefKey.rewriteEnabled)
-    @State private var provider = d.string(forKey: PrefKey.rewriteProvider) ?? RewriteProvider.anthropic.rawValue
-    @State private var model = d.string(forKey: PrefKey.rewriteModel) ?? "claude-haiku-4-5-20251001"
-    @State private var baseURL = d.string(forKey: PrefKey.rewriteBaseURL) ?? "https://api.openai.com/v1"
-    @State private var prompt = d.string(forKey: PrefKey.rewritePrompt) ?? DefaultPref.rewritePromptTemplate
+/// The one model configuration in the app. Everything that needs an LLM —
+/// rewriting a selection, repairing a cross-language mixup, classifying a quick
+/// action — reads what's set here.
+private struct AITab: View {
+    @State private var provider = d.string(forKey: PrefKey.aiProvider) ?? RewriteProvider.anthropic.rawValue
+    @State private var model = d.string(forKey: PrefKey.aiModel) ?? RewriteProvider.anthropic.defaultModel
+    @State private var baseURL = d.string(forKey: PrefKey.aiBaseURL) ?? "http://localhost:11434/v1"
     @State private var apiKey = ""
 
     private var storedKey: String { Keychain.get(account: RewriteService.keychainAccount) ?? "" }
     private var isDirty: Bool {
-        enabled != d.bool(forKey: PrefKey.rewriteEnabled)
-        || provider != d.string(forKey: PrefKey.rewriteProvider)
-        || model != d.string(forKey: PrefKey.rewriteModel)
-        || baseURL != d.string(forKey: PrefKey.rewriteBaseURL)
-        || prompt != (d.string(forKey: PrefKey.rewritePrompt) ?? DefaultPref.rewritePromptTemplate)
+        provider != d.string(forKey: PrefKey.aiProvider)
+        || model != d.string(forKey: PrefKey.aiModel)
+        || baseURL != d.string(forKey: PrefKey.aiBaseURL)
         || apiKey != storedKey
     }
 
-    private var rewriteFormHeight: CGFloat {
+    private var formHeight: CGFloat {
         switch RewriteProvider(rawValue: provider) ?? .anthropic {
-        case .appleOnDevice: return 60
-        case .openaiCompatible: return 150
-        case .anthropic: return 122
+        case .appleOnDevice: return 32
+        case .openaiCompatible: return 120
+        case .anthropic: return 92
         }
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Used by everything that calls a model: rewriting a selection, language repair, and quick-action matching.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+
             Form {
-                Toggle("Clean up transcript with an LLM", isOn: $enabled)
                 Picker("Provider", selection: $provider) {
                     ForEach(RewriteProvider.allCases) { Text($0.label).tag($0.rawValue) }
                 }
@@ -581,8 +582,7 @@ private struct RewriteTab: View {
                     SecureField("API key (stored in Keychain)", text: $apiKey)
                 }
             }
-            .frame(height: rewriteFormHeight)
-
+            .frame(height: formHeight)
             .onChange(of: provider) { old, new in
                 // Switching providers swaps in that provider's default model,
                 // unless the user has typed a custom one.
@@ -591,39 +591,60 @@ private struct RewriteTab: View {
                       model == oldProvider.defaultModel || model.isEmpty else { return }
                 model = newProvider.defaultModel
             }
-            if provider == RewriteProvider.appleOnDevice.rawValue {
-                let state = OnDeviceModelClient.availability()
-                HStack(spacing: 6) {
-                    Image(systemName: state.isAvailable
-                          ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                        .foregroundStyle(state.isAvailable ? .green : .orange)
-                    Text(state.summary)
-                    if let recovery = state.recovery {
-                        Text("— \(recovery)").foregroundStyle(.secondary)
-                    }
-                }
-                .font(.caption).fixedSize(horizontal: false, vertical: true)
+
+            switch RewriteProvider(rawValue: provider) ?? .anthropic {
+            case .appleOnDevice:
+                onDeviceStatus
+            case .openaiCompatible:
+                Text("Point this at a local server (Ollama, LM Studio) to keep your writing on this machine. The API key is optional here — it simply isn't sent when empty.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
+            case .anthropic:
+                Text("Your selections and transcripts are sent to Anthropic — switch to Apple Intelligence or a local server to keep them on this machine.")
+                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
             }
 
-            Text("User prompt — `{{input}}` is replaced with the transcript. Vocabulary and guardrails are added automatically via the system prompt.")
-                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            TextEditor(text: $prompt)
-                .font(.body.monospaced()).frame(minHeight: 90)
-                .overlay(RoundedRectangle(cornerRadius: 6).stroke(.quaternary))
-            Button("Reset to default prompt") { prompt = DefaultPref.rewritePromptTemplate }
-                .font(.caption).buttonStyle(.link)
-
             SaveBar(disabled: !isDirty) {
-                d.set(enabled, forKey: PrefKey.rewriteEnabled)
-                d.set(provider, forKey: PrefKey.rewriteProvider)
-                d.set(model, forKey: PrefKey.rewriteModel)
-                d.set(baseURL, forKey: PrefKey.rewriteBaseURL)
-                d.set(prompt, forKey: PrefKey.rewritePrompt)
+                d.set(provider, forKey: PrefKey.aiProvider)
+                d.set(model, forKey: PrefKey.aiModel)
+                d.set(baseURL, forKey: PrefKey.aiBaseURL)
                 Keychain.set(apiKey, account: RewriteService.keychainAccount)
             }
         }
         .frame(maxHeight: .infinity, alignment: .top)
         .onAppear { apiKey = storedKey }
+    }
+
+    /// Availability of Apple's on-device model, plus honest expectations. It is
+    /// the private/free option, not the best one — saying so here is cheaper
+    /// than a user concluding the feature got worse.
+    @ViewBuilder
+    private var onDeviceStatus: some View {
+        let state = OnDeviceModelClient.availability()
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 6) {
+                Image(systemName: state.isAvailable
+                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
+                    .foregroundStyle(state.isAvailable ? .green : .orange)
+                Text(state.summary)
+                if let recovery = state.recovery {
+                    Text("— \(recovery)").foregroundStyle(.secondary)
+                }
+            }
+            .fixedSize(horizontal: false, vertical: true)
+
+            if state == .needsAppleIntelligence {
+                Button("Open System Settings") {
+                    if let url = URL(string: "x-apple.systempreferences:") {
+                        NSWorkspace.shared.open(url)
+                    }
+                }
+                .font(.caption)
+            }
+
+            Text("Runs on this Mac: nothing is sent anywhere, no API key, works offline. It's a much smaller model than a hosted one — good for short everyday rewrites, weaker at matching your voice and at long or intricate instructions. Long selections won't fit and are reported rather than truncated.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
     }
 }
 
@@ -686,8 +707,8 @@ private struct ActionsTab: View {
                 set: { llmFallback = $0; d.set($0, forKey: PrefKey.quickActionsLLMFallback) }))
                 .disabled(!enabled || !hasAPIKey)
             Text(hasAPIKey
-                 ? "Sends short transcripts to your Rewrite provider to recognize paraphrased commands like “could you pull up github”."
-                 : "Requires an API key — configure one in the Rewrite tab.")
+                 ? "Sends short transcripts to your AI provider to recognize paraphrased commands like “could you pull up github”."
+                 : "Requires an API key — configure one in the AI tab.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             List {
@@ -812,17 +833,6 @@ private struct StyleTab: View {
     @ObservedObject var learner: StyleLearner
     @State private var learningEnabled = d.bool(forKey: PrefKey.styleLearningEnabled)
     @State private var replacements: [String: String] = [:]
-    @State private var provider = d.string(forKey: PrefKey.selectionRewriteProvider)
-        ?? RewriteProvider.anthropic.rawValue
-    @State private var model = d.string(forKey: PrefKey.selectionRewriteModel) ?? "claude-opus-4-8"
-    @State private var baseURL = d.string(forKey: PrefKey.selectionRewriteBaseURL)
-        ?? "http://localhost:11434/v1"
-
-    private var isDirty: Bool {
-        provider != d.string(forKey: PrefKey.selectionRewriteProvider)
-        || model != d.string(forKey: PrefKey.selectionRewriteModel)
-        || baseURL != d.string(forKey: PrefKey.selectionRewriteBaseURL)
-    }
 
     var body: some View {
         ScrollView {
@@ -841,34 +851,6 @@ private struct StyleTab: View {
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
 
             learningSection
-            Divider()
-
-            Form {
-                Picker("Provider", selection: $provider) {
-                    ForEach(RewriteProvider.allCases) { Text($0.label).tag($0.rawValue) }
-                }
-                // The on-device model has nothing to configure — no key, no
-                // endpoint, no model name.
-                if provider != RewriteProvider.appleOnDevice.rawValue {
-                    if provider == RewriteProvider.openaiCompatible.rawValue {
-                        TextField("Base URL", text: $baseURL)
-                    }
-                    TextField("Model", text: $model)
-                }
-            }
-            .frame(height: providerFormHeight)
-
-            switch RewriteProvider(rawValue: provider) ?? .anthropic {
-            case .appleOnDevice:
-                onDeviceStatus
-            case .openaiCompatible:
-                Text("Point this at a local server (Ollama, LM Studio) to keep your writing on this machine. The API key from the Rewrite tab is reused, and simply not sent when it's empty.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            case .anthropic:
-                Text("Uses the API key from the Rewrite tab. Your selection is sent to Anthropic — switch to Apple Intelligence or a local server to keep it on this machine.")
-                    .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-            }
-
             Divider()
 
             if let error = style.loadError {
@@ -910,12 +892,8 @@ private struct StyleTab: View {
 
             Text("Note: rewriting works by copying the selection and pasting the result, so your clipboard ends up holding the rewrite.")
                 .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
-
-            SaveBar(disabled: !isDirty) {
-                d.set(provider, forKey: PrefKey.selectionRewriteProvider)
-                d.set(model, forKey: PrefKey.selectionRewriteModel)
-                d.set(baseURL, forKey: PrefKey.selectionRewriteBaseURL)
-            }
+            Text("The model this uses is set in Settings → AI.")
+                .font(.caption).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
         }
     }
 
@@ -930,7 +908,7 @@ private struct StyleTab: View {
         if config.templateNames.isEmpty {
             VStack(alignment: .leading, spacing: 4) {
                 Text("Templates").font(.subheadline.bold())
-                Text("Separate profiles for different kinds of writing — an email voice, a Slack voice — each adding to your base rules. Name one while you speak (\"style it as an email\"), or set a default here.")
+                Text("Separate profiles for different kinds of writing — an email voice, a Slack voice — each adding to your base rules. Name one while you speak (\"rewrite it as an email\"), or set a default here.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 Button("Add example templates") { style.addExampleTemplates() }
@@ -943,7 +921,7 @@ private struct StyleTab: View {
                     ForEach(config.templateNames, id: \.self) { Text($0).tag($0) }
                 }
                 .pickerStyle(.menu).frame(maxWidth: 320)
-                Text("Used when you don't name one. Say \"style it as \(config.templateNames[0].lowercased())\" to pick a different one for a single rewrite.")
+                Text("Used when you don't name one. Say \"rewrite it as \(config.templateNames[0].lowercased())\" to pick a different one for a single rewrite.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if StyleStore.exampleTemplates.contains(where: {
@@ -963,47 +941,6 @@ private struct StyleTab: View {
         Binding(
             get: { style.config?.defaultTemplate ?? "" },
             set: { style.setDefaultTemplate($0.isEmpty ? nil : $0) })
-    }
-
-    private var providerFormHeight: CGFloat {
-        switch RewriteProvider(rawValue: provider) ?? .anthropic {
-        case .appleOnDevice: return 32
-        case .openaiCompatible: return 88
-        case .anthropic: return 60
-        }
-    }
-
-    /// Availability of Apple's on-device model, plus honest expectations. It is
-    /// the private/free option, not the best one — saying so here is cheaper
-    /// than a user concluding the feature got worse.
-    @ViewBuilder
-    private var onDeviceStatus: some View {
-        let state = OnDeviceModelClient.availability()
-        VStack(alignment: .leading, spacing: 6) {
-            HStack(spacing: 6) {
-                Image(systemName: state.isAvailable
-                      ? "checkmark.circle.fill" : "exclamationmark.triangle.fill")
-                    .foregroundStyle(state.isAvailable ? .green : .orange)
-                Text(state.summary)
-                if let recovery = state.recovery {
-                    Text("— \(recovery)").foregroundStyle(.secondary)
-                }
-            }
-            .fixedSize(horizontal: false, vertical: true)
-
-            if state == .needsAppleIntelligence {
-                Button("Open System Settings") {
-                    if let url = URL(string: "x-apple.systempreferences:") {
-                        NSWorkspace.shared.open(url)
-                    }
-                }
-                .font(.caption)
-            }
-
-            Text("Runs on this Mac: nothing is sent anywhere, no API key, works offline. It's a much smaller model than a hosted one — good for short everyday rewrites, weaker at matching your voice and at long or intricate instructions. Long selections won't fit and are reported rather than truncated.")
-                .font(.caption).foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-        }
     }
 
     // MARK: - learned style

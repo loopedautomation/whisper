@@ -14,7 +14,7 @@ runs **local open-source Whisper models** (bring your own model) — no cloud
 transcription. It lives in the menu bar, is driven by global hotkeys, and the
 transcribed text is copied to the clipboard and pasted at your cursor.
 
-**Contents:** [Features](#features) · [Install](#install) · [Build & run](#build--run) · [LLM rewrite](#llm-rewrite) · [Tests](#tests) · [License](#license)
+**Contents:** [Features](#features) · [Install](#install) · [Build & run](#build--run) · [AI model](#ai-model) · [Rewrite my selection](#rewrite-my-selection) · [Tests](#tests) · [License](#license)
 
 > Apple Silicon, macOS 14+. Transcription is powered by
 > [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML).
@@ -28,8 +28,8 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 - 🌐 **fn / Globe key support** — hold-to-talk or double-tap-to-toggle (see caveats).
 - 📋 **Auto clipboard + paste** at the cursor.
 - ⚡ **Realtime mode** — live caption as you speak.
-- ✨ **LLM cleanup** — optionally fix typos/punctuation via an Anthropic
-  or OpenAI-compatible API key (stored in Keychain).
+- ✨ **One AI setting** — Anthropic, any OpenAI-compatible endpoint, or Apple's
+  on-device model, shared by every feature that needs one (key in Keychain).
 - 📖 **Vocabulary** — bias recognition toward your names / jargon / identifiers.
 - ✍️ **Rewrite my selection** — select text anywhere, hold a hotkey, say what you
   want ("make it shorter", "fix the typos"), and it's replaced in place in your
@@ -37,7 +37,7 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 - 🎯 **Learns your voice** — picks up how you write from your dictation and your
   edits, and suggests style rules once the evidence is there. Stays local.
 - 🎚️ **Style templates** — separate voices for email, Slack, docs; pick one by
-  saying "style it as an email".
+  saying "rewrite it as an email".
 - 🔒 Launch at login, menu-bar agent (no Dock icon).
 
 ## Install
@@ -78,12 +78,19 @@ Dictation by default — set _System Settings → Keyboard → "Press 🌐 to" �
 Nothing_ to avoid conflicts. Some non-Apple keyboards don't emit an fn event;
 keep a standard shortcut as a fallback.
 
-## LLM rewrite
+## AI model
 
-In **Settings → Rewrite**, enable cleanup, choose Anthropic (default, e.g.
-`claude-haiku-4-5-20251001`) or any OpenAI-compatible endpoint, and paste an
-API key. The key is stored in the macOS Keychain. On any API error or timeout
-the raw transcript is used instead.
+One model configuration serves everything that calls an LLM: rewriting a
+selection, language repair, and quick-action matching.
+
+In **Settings → AI**, choose Anthropic (default, e.g. `claude-opus-4-8`), any
+OpenAI-compatible endpoint (point it at Ollama or LM Studio to stay local), or
+Apple Intelligence on-device. Paste an API key for the hosted providers; it's
+stored in the macOS Keychain. On any API error or timeout, whatever you
+dictated is delivered unchanged.
+
+Dictation itself is never sent to a model — it's transcribed on-device by
+Whisper and delivered as-is.
 
 ## Rewrite my selection
 
@@ -178,7 +185,7 @@ templates alongside the base profile:
 }
 ```
 
-Name one while you speak — *"style it as an email"*, *"make it shorter as a
+Name one while you speak — *"rewrite it as an email"*, *"make it shorter as a
 slack message"* — or set `defaultTemplate` (or the picker in **Settings →
 Style**) so one applies whenever you don't say otherwise. An unrecognized name
 falls back to the base rather than failing, since a misheard word shouldn't cost

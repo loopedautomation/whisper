@@ -38,13 +38,15 @@ enum RewriteError: LocalizedError, Equatable {
     }
 }
 
-/// Cleans up a raw transcript via an LLM (fix typos, punctuation,
-/// capitalization) while preserving meaning and honoring the vocabulary list.
-/// Resilient by design: any failure falls back to the raw transcript.
+/// The provider layer every LLM caller goes through: selection rewrite,
+/// language repair, and quick-action classification. Transcript-level work is
+/// resilient by design — any failure falls back to the raw transcript.
 struct RewriteService {
+    /// Not renamed alongside the `ai*` preferences: the key already lives here
+    /// in the Keychain, and moving it would strand every existing user's key.
     static let keychainAccount = "rewrite-api-key"
-    /// Pass-through template for a repair-only call (no user rewrite instruction
-    /// applied) — used when language repair runs without general rewrite enabled.
+    /// Pass-through template — the transcript goes to the model unchanged, with
+    /// only the repair instruction applied via the system prompt.
     static let languageRepairOnlyTemplate = "{{input}}"
 
     enum Provider {
@@ -58,8 +60,11 @@ struct RewriteService {
         var provider: Provider
         var model: String
         var apiKey: String
-        /// User-controlled prompt template; `{{input}}` is replaced with the transcript.
-        var promptTemplate: String
+        /// Prompt template; `{{input}}` is replaced with the transcript. Only
+        /// language repair still varies this, and only to the pass-through
+        /// default — the user-editable template went away with the old
+        /// transcript-cleanup feature.
+        var promptTemplate: String = RewriteService.languageRepairOnlyTemplate
         var timeout: TimeInterval = 8
     }
 
