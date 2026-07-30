@@ -41,9 +41,12 @@ final class StyleLearner: ObservableObject {
     ///
     /// Takes the *raw* transcript deliberately. The LLM-cleaned version is the
     /// model's prose, and feeding it back would teach the app to imitate itself.
-    func harvestDictation(_ rawTranscript: String) {
+    /// `language` is what transcription already determined for this recording;
+    /// passing it avoids re-detecting, and is more reliable than detection on a
+    /// short transcript.
+    func harvestDictation(_ rawTranscript: String, language: String? = nil) {
         guard isEnabled else { return }
-        corpus.addSample(rawTranscript, source: .dictation)
+        corpus.addSample(rawTranscript, source: .dictation, language: language)
         save()
     }
 
@@ -77,12 +80,18 @@ final class StyleLearner: ObservableObject {
     /// Style for one specific passage: the hand-written profile plus whatever
     /// the corpus can contribute for text of this shape.
     func resolve(_ profile: StyleProfile, for passage: String) -> ResolvedStyle {
+        // Readiness reported for *this passage's* language, not the corpus at
+        // large: rewriting German with an English-only corpus is generic, and
+        // saying otherwise would claim a voice match that isn't happening.
         ResolvedStyle(
             profile: profile,
             learnedSamples: corpus.samples(for: passage).map(\.text),
             corrections: corpus.recentCorrections(),
-            readiness: readiness)
+            readiness: corpus.readiness(in: LanguageDetector.detect(passage)))
     }
+
+    /// Readiness for a specific language, for the Settings breakdown.
+    func readiness(in language: String?) -> StyleReadiness { corpus.readiness(in: language) }
 
     // MARK: - proposals
 
@@ -137,8 +146,12 @@ final class StyleLearner: ObservableObject {
         // costs the user some accumulated learning but nothing irreplaceable.
         // This is exactly the opposite of style.json, where a parse failure has
         // to be loud because those are rules the user wrote by hand.
-        guard let decoded = try? decoder.decode(StyleCorpus.self, from: data) else { return }
+        guard var decoded = try? decoder.decode(StyleCorpus.self, from: data) else { return }
+        // Samples stored before languages were recorded have none; fill them in
+        // once so retrieval can filter properly from here on.
+        let backfilled = decoded.backfillLanguages()
         corpus = decoded
+        if backfilled { save() }
     }
 
     /// Serializes and writes off the main actor. The corpus reaches a megabyte

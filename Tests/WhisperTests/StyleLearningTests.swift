@@ -645,3 +645,193 @@ final class ExampleTemplateTests: XCTestCase {
         XCTAssertEqual(reloaded.profile(named: "slack").enforced.maxWords, 60)
     }
 }
+
+/// Real prose in each language — detection needs actual sentences, not fixtures
+/// built from a word bank.
+private let englishSamples = [
+    "The migration slipped again because nobody owned the schema change, and the estimate was never revisited after that.",
+    "I looked at the billing service this morning and the retry logic is what keeps waking people up at night.",
+    "We should ship on Friday and tell the team afterwards, rather than waiting for another round of review.",
+    "Onboarding is the part customers complain about most, and it has been on the roadmap for three quarters now.",
+    "The reporting job runs twice because the scheduler and the cron entry both fire it, which nobody noticed.",
+    "Search relevance improved a lot once we stopped weighting the title field quite so heavily.",
+    "Nobody has looked at the deployment scripts since the last contractor left, and they still reference the old bucket.",
+    "The support queue doubled in April, mostly password resets, which suggests the login flow is confusing people.",
+    "I would rather cut the scope than move the date again, because the date has already moved twice this year.",
+    "Our test suite passes locally and fails in CI, and the difference turns out to be the timezone on the runner.",
+    "The design review keeps stalling because two people disagree about navigation and neither will write it down.",
+    "Caching the customer lookup took the page from two seconds to under three hundred milliseconds."
+]
+
+private let germanSamples = [
+    "Die Migration hat sich wieder verzögert, weil niemand die Schemaänderung übernommen hat und die Schätzung nie überprüft wurde.",
+    "Ich habe mir heute Morgen den Abrechnungsdienst angesehen, und die Wiederholungslogik hält die Leute nachts wach.",
+    "Wir sollten am Freitag ausliefern und das Team danach informieren, statt auf eine weitere Prüfung zu warten.",
+    "Das Onboarding ist der Teil, über den sich Kunden am meisten beschweren, und es steht seit drei Quartalen auf der Liste.",
+    "Der Berichtsauftrag läuft zweimal, weil sowohl der Scheduler als auch der Cron-Eintrag ihn starten.",
+    "Die Suchrelevanz hat sich deutlich verbessert, nachdem wir das Titelfeld nicht mehr so stark gewichtet haben.",
+    "Niemand hat sich die Deployment-Skripte angesehen, seit der letzte Auftragnehmer gegangen ist, und sie verweisen noch auf den alten Bucket.",
+    "Die Support-Warteschlange hat sich im April verdoppelt, meist Passwort-Zurücksetzungen, was darauf hindeutet, dass der Login verwirrend ist.",
+    "Ich würde lieber den Umfang reduzieren als den Termin erneut zu verschieben, denn der Termin wurde dieses Jahr schon zweimal verschoben.",
+    "Unsere Testsuite läuft lokal durch und schlägt in der CI fehl, und der Unterschied ist die Zeitzone auf dem Runner.",
+    "Das Design-Review kommt nicht voran, weil zwei Leute über die Navigation streiten und niemand es aufschreibt.",
+    "Das Zwischenspeichern der Kundenabfrage brachte die Seite von zwei Sekunden auf unter dreihundert Millisekunden."
+]
+
+final class LanguageDetectorTests: XCTestCase {
+
+    func testDetectsEnglishAndGerman() {
+        XCTAssertEqual(LanguageDetector.detect(englishSamples[0]), "en")
+        XCTAssertEqual(LanguageDetector.detect(germanSamples[0]), "de")
+    }
+
+    /// A wrong answer is worse than none, so short or ambiguous text returns nil
+    /// rather than a coin-toss guess.
+    func testShortOrAmbiguousTextIsUnknown() {
+        XCTAssertNil(LanguageDetector.detect("ok"))
+        XCTAssertNil(LanguageDetector.detect("yes please"))
+        XCTAssertNil(LanguageDetector.detect(""))
+    }
+
+    func testNormalizesRegionAndScriptTags() {
+        XCTAssertEqual(LanguageDetector.normalize("en-GB"), "en")
+        XCTAssertEqual(LanguageDetector.normalize("zh-Hans"), "zh")
+        XCTAssertNil(LanguageDetector.normalize("und"))
+        XCTAssertNil(LanguageDetector.normalize(""))
+    }
+}
+
+final class PerLanguageStyleTests: XCTestCase {
+
+    private func corpus() -> StyleCorpus {
+        var c = StyleCorpus()
+        for (i, text) in englishSamples.enumerated() {
+            c.addSample(text, source: .written, at: day(i))
+        }
+        return c
+    }
+
+    /// Samples are tagged with the language they're written in.
+    func testSamplesRecordTheirLanguage() {
+        XCTAssertEqual(corpus().samples.compactMap(\.language), Array(repeating: "en", count: englishSamples.count))
+    }
+
+    /// A caller that already knows the language (dictation does) is trusted over
+    /// re-detection, which is unreliable on short transcripts.
+    func testSuppliedLanguageWinsOverDetection() {
+        var c = StyleCorpus()
+        c.addSample(englishSamples[0], source: .dictation, language: "de")
+        XCTAssertEqual(c.samples.first?.language, "de")
+    }
+
+    /// The core fix: English samples must not be offered as the user's voice
+    /// when the passage is German. Wrong-language samples drag the rewrite
+    /// toward the wrong rhythm, which is worse than sending none.
+    func testRetrievalWithholdsWrongLanguageSamples() {
+        let c = corpus()
+        XCTAssertFalse(c.samples(for: englishSamples[0]).isEmpty,
+                       "English passage should get the English samples")
+        XCTAssertTrue(c.samples(for: germanSamples[0]).isEmpty,
+                      "German passage must not receive English samples")
+    }
+
+    /// Once German samples exist, a German passage gets German ones — and only
+    /// those.
+    func testRetrievalUsesTheMatchingLanguage() {
+        var c = corpus()
+        for (i, text) in germanSamples.enumerated() {
+            c.addSample(text, source: .written, at: day(100 + i))
+        }
+        let retrieved = c.samples(for: germanSamples[0])
+        XCTAssertFalse(retrieved.isEmpty)
+        XCTAssertTrue(retrieved.allSatisfy { $0.language == "de" },
+                      "got \(retrieved.compactMap(\.language))")
+    }
+
+    /// Readiness is per language, so a corpus full of English reports "generic"
+    /// for German rather than promising a match it can't deliver.
+    func testReadinessIsMeasuredPerLanguage() {
+        let c = corpus()
+        XCTAssertEqual(c.readiness(in: "de"), .generic)
+        if case .generic = c.readiness(in: "en") {
+            XCTFail("English should be past generic with \(englishSamples.count) samples")
+        }
+    }
+
+    func testDominantLanguageIsTheMostUsed() {
+        var c = corpus()
+        c.addSample(germanSamples[0], source: .written, at: day(200))
+        XCTAssertEqual(c.dominantLanguage, "en")
+        XCTAssertEqual(c.languageCounts.first?.language, "en")
+        XCTAssertEqual(c.languageCounts.first?.count, englishSamples.count)
+    }
+
+    /// Corpora written before languages were recorded must fill in on load,
+    /// not be stranded outside every retrieval filter.
+    func testBackfillPopulatesMissingLanguages() {
+        var c = StyleCorpus()
+        for (i, text) in englishSamples.enumerated() {
+            c.samples.append(StyleSample(text: text, register: .of(text), source: .written,
+                                         addedAt: day(i), language: nil))
+        }
+        XCTAssertTrue(c.backfillLanguages())
+        XCTAssertEqual(c.samples.compactMap(\.language), Array(repeating: "en", count: englishSamples.count))
+        // Idempotent — a second pass has nothing to do.
+        XCTAssertFalse(c.backfillLanguages())
+    }
+
+    /// Punctuation habits are language-specific, so evidence must come from one
+    /// language rather than being pooled across all of them.
+    func testPunctuationIsMinedFromOneLanguageOnly() {
+        var c = StyleCorpus()
+        // Plenty of English, all em-dash-free.
+        // Distinct prose, not variations on one line — the corpus drops
+        // near-duplicates, which would otherwise leave too few to mine from.
+        for (i, text) in englishSamples.enumerated() {
+            c.addSample(text, source: .written, at: day(i))
+        }
+        // A little German, which does use one — this must not veto the English rule.
+        c.addSample(germanSamples[0] + " Und dann \u{2014} plötzlich.", source: .written, at: day(50))
+
+        let profile = StyleProfile(voice: .init(), prompted: .init(), enforced: .init())
+        XCTAssertTrue(StyleMiner.proposals(from: c, profile: profile)
+            .contains { $0.id == "sub:\u{2014}" },
+            "English evidence should still yield the em dash rule")
+    }
+}
+
+final class LocalizedCommandTests: XCTestCase {
+
+    /// The point of the keyword tables: a German command lands on the same
+    /// intent as its English equivalent, rather than falling through to custom.
+    func testGermanCommandsMatchTheSameIntents() {
+        XCTAssertEqual(CommandNormalizer.normalize("mach es kürzer").intent, .shorten)
+        XCTAssertEqual(CommandNormalizer.normalize("korrigiere die Tippfehler").intent, .fixTypos)
+        XCTAssertEqual(CommandNormalizer.normalize("schreib um").intent, .rewrite)
+        XCTAssertEqual(CommandNormalizer.normalize("mach es formeller").intent, .formalize)
+    }
+
+    /// Negation must not invert in other languages either.
+    func testGermanNegationIsNotInverted() {
+        XCTAssertEqual(CommandNormalizer.normalize("mach es weniger formell").intent, .casualize)
+    }
+
+    func testFrenchAndSpanishCommands() {
+        XCTAssertEqual(CommandNormalizer.normalize("rends-le plus court").intent, .shorten)
+        XCTAssertEqual(CommandNormalizer.normalize("corrige les fautes").intent, .fixTypos)
+        XCTAssertEqual(CommandNormalizer.normalize("hazlo más corto").intent, .shorten)
+        XCTAssertEqual(CommandNormalizer.normalize("reescribe esto").intent, .rewrite)
+    }
+
+    /// Accents and umlauts have to survive cleaning, or none of the above match.
+    func testAccentedCharactersSurviveCleaning() {
+        XCTAssertTrue(CommandNormalizer.clean("mach es KÜRZER, bitte").contains("kürzer"))
+        XCTAssertTrue(CommandNormalizer.clean("plus décontracté").contains("décontracté"))
+    }
+
+    /// English still wins where a word exists in both — it's checked first.
+    func testEnglishStillTakesPrecedence() {
+        XCTAssertEqual(CommandNormalizer.normalize("make it shorter").intent, .shorten)
+        XCTAssertEqual(CommandNormalizer.normalize("fix the typos").intent, .fixTypos)
+    }
+}

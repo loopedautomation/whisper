@@ -63,9 +63,15 @@ enum CommandNormalizer {
     /// intent — "make it shorter as a slack message" is both.
     static func normalize(_ transcript: String, templates: [String] = []) -> Command {
         var cleaned = clean(transcript)
+        // Filler-stripping is tuned for English, and some of those words carry
+        // meaning elsewhere — German "schreib **um**" means rewrite, but "um"
+        // is the commonest English filler. So keep a punctuation-only version
+        // for matching non-English keywords against.
+        let unstripped = collapse(punctuationOnly(transcript))
         let template = extractTemplate(from: &cleaned, templates: templates)
         return Command(raw: transcript, cleaned: cleaned,
-                       intent: intent(for: cleaned), template: template)
+                       intent: intent(for: cleaned, keepingFiller: unstripped),
+                       template: template)
     }
 
     /// Finds a template name in the command and removes it, along with the
@@ -79,7 +85,11 @@ enum CommandNormalizer {
             let needle = " \(name.lowercased()) "
             guard padded.contains(needle) else { continue }
             var remainder = padded.replacingOccurrences(of: needle, with: " ")
-            for connective in [" as a ", " as an ", " as the ", " as ", " in ", " style ", " like a ", " like an "] {
+            for connective in [" as a ", " as an ", " as the ", " as ", " in ", " style ",
+                               " like a ", " like an ",
+                               " als ", " als eine ", " als einen ", " im ", " stil ",
+                               " comme ", " comme un ", " comme une ", " en ",
+                               " como ", " como un ", " como una "] {
                 remainder = remainder.replacingOccurrences(of: connective, with: " ")
             }
             cleaned = remainder.split(separator: " ").joined(separator: " ")
@@ -102,8 +112,15 @@ enum CommandNormalizer {
     /// Removed wherever they appear. Strictly limited to words that are never
     /// anything but filler.
     private static let fillerWords: Set<String> = [
+        // English
         "um", "uhm", "uh", "uhh", "erm", "er", "ah", "eh", "hmm", "mhm",
-        "please", "okay", "ok", "hey", "yeah"
+        "please", "okay", "ok", "hey", "yeah",
+        // German, French, Spanish — only words that are filler in every
+        // language the app might see them in. "also" (German for "so") is
+        // deliberately absent: it's an ordinary English word.
+        "äh", "ähm", "bitte", "danke",
+        "euh", "ben", "voilà", "merci",
+        "eh", "pues", "vale", "gracias", "porfavor"
     ]
 
     /// Removed only at the start, where they're throat-clearing. Mid-sentence
@@ -122,11 +139,20 @@ enum CommandNormalizer {
         "i want it", "i want this", "have it be", "make it sound"
     ]
 
+    /// Lowercased, punctuation reduced to spaces, nothing removed.
+    ///
+    /// `isLetter` is Unicode-aware, so umlauts and accents survive — turning
+    /// "kürzer" into "k rzer" would defeat every localized keyword.
+    static func punctuationOnly(_ transcript: String) -> String {
+        let lowered = transcript.lowercased()
+        return String(lowered.map {
+            $0.isLetter || $0.isNumber || $0 == "'" || $0 == "-" ? $0 : " "
+        })
+    }
+
     static func clean(_ transcript: String) -> String {
         // Keep apostrophes and hyphens; they carry meaning inside words.
-        var text = transcript.lowercased()
-        text = String(text.map { $0.isLetter || $0.isNumber || $0 == "'" || $0 == "-" ? $0 : " " })
-        text = collapse(text)
+        var text = collapse(punctuationOnly(transcript))
 
         for phrase in fillerPhrases {
             text = collapse(text.replacingOccurrences(of: " \(phrase) ", with: " ",
@@ -195,7 +221,53 @@ enum CommandNormalizer {
                     "tidy up", "tidy it up", "improve", "better", "fix it up", "polish it"])
     ]
 
-    static func intent(for cleaned: String) -> RewriteIntent {
+    /// Keyword tables for languages other than English.
+    ///
+    /// Tried after the English table, so an English command is never
+    /// misread. A language with no table still works — the instruction falls
+    /// through to `.custom` and goes to the model verbatim, which understands
+    /// it; what's lost is the canonical phrasing and negation handling, and
+    /// that's exactly what these tables restore.
+    private static let localizedTables: [(RewriteIntent, [String])] = [
+        // German
+        (.shorten, ["kürzer", "kuerzer", "kürze", "verkürze", "knapper", "straffen", "zusammenfassen"]),
+        (.fixTypos, ["tippfehler", "rechtschreibung", "grammatik", "korrigiere", "fehler korrigieren"]),
+        (.lengthen, ["länger", "laenger", "ausführlicher", "erweitere", "mehr detail"]),
+        (.simplify, ["einfacher", "vereinfache", "verständlicher"]),
+        (.formalize, ["formeller", "förmlicher", "sachlicher", "professioneller"]),
+        (.casualize, ["lockerer", "informeller", "legerer", "umgangssprachlicher"]),
+        (.rewrite, ["umschreiben", "neu schreiben", "überarbeite", "formuliere", "verbessere",
+                    "korrigier das", "schreib um"]),
+        // French
+        (.shorten, ["plus court", "raccourcis", "raccourcir", "résume", "resume", "condense"]),
+        (.fixTypos, ["fautes", "orthographe", "grammaire", "corrige"]),
+        (.lengthen, ["plus long", "développe", "developpe", "allonge"]),
+        (.simplify, ["simplifie", "plus simple"]),
+        (.formalize, ["plus formel", "formel", "professionnel"]),
+        (.casualize, ["plus décontracté", "informel", "familier"]),
+        (.rewrite, ["réécris", "reecris", "reformule", "améliore", "ameliore"]),
+        // Spanish
+        (.shorten, ["más corto", "mas corto", "acorta", "resume", "condensa"]),
+        (.fixTypos, ["errores", "ortografía", "ortografia", "gramática", "gramatica", "corrige"]),
+        (.lengthen, ["más largo", "mas largo", "amplía", "amplia", "extiende"]),
+        (.simplify, ["simplifica", "más simple", "mas simple"]),
+        (.formalize, ["más formal", "mas formal", "formal", "profesional"]),
+        (.casualize, ["más informal", "mas informal", "informal", "coloquial"]),
+        (.rewrite, ["reescribe", "reformula", "mejora", "arregla"])
+    ]
+
+    /// Negated forms in other languages, checked before their tables for the
+    /// same reason the English ones are: "weniger formell" contains "formell".
+    private static let localizedNegations: [(String, RewriteIntent)] = [
+        ("weniger formell", .casualize), ("nicht so formell", .casualize),
+        ("weniger förmlich", .casualize), ("weniger locker", .formalize),
+        ("moins formel", .casualize), ("moins long", .shorten),
+        ("menos formal", .casualize), ("menos largo", .shorten)
+    ]
+
+    /// `keepingFiller` is the same command with punctuation stripped but filler
+    /// words intact, used for the non-English tables (see `normalize`).
+    static func intent(for cleaned: String, keepingFiller: String = "") -> RewriteIntent {
         // An empty command ("um, please") is a bare "rewrite it".
         guard !cleaned.isEmpty else { return .rewrite }
         let padded = " \(cleaned) "
@@ -205,6 +277,18 @@ enum CommandNormalizer {
         }
         for (intent, keywords) in table {
             for keyword in keywords where padded.contains(" \(keyword) ") {
+                return intent
+            }
+        }
+        // English didn't match; try the other languages, negations first, and
+        // against the un-stripped text so English filler words can't eat a
+        // meaningful particle.
+        let localized = keepingFiller.isEmpty ? padded : " \(keepingFiller) "
+        for (phrase, intent) in localizedNegations where localized.contains(" \(phrase) ") {
+            return intent
+        }
+        for (intent, keywords) in localizedTables {
+            for keyword in keywords where localized.contains(" \(keyword) ") {
                 return intent
             }
         }

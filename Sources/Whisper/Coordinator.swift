@@ -801,7 +801,9 @@ final class Coordinator: ObservableObject {
             // Your own words, in your own phrasing. Harvested *before* the LLM
             // cleanup below — the cleaned version is the model's prose, and
             // learning from it would teach the app to imitate itself.
-            learner.harvestDictation(raw)
+            // Pass the language transcription already settled on — more reliable
+            // than re-detecting from a short transcript, and free.
+            learner.harvestDictation(raw, language: transcribedLanguage())
 
             // Incremental live-insertion: we've already typed the confirmed prefix
             // during recording. Type only the final remainder, and skip rewrite
@@ -962,6 +964,19 @@ final class Coordinator: ObservableObject {
 
     private func languageSelection() -> LanguageSelection {
         WhisperLanguage.selection(for: selectedLanguageCodes())
+    }
+
+    /// The language this recording was transcribed as, as an ISO 639-1 code, or
+    /// `nil` when the model auto-detected freely and didn't tell us. Used to tag
+    /// harvested samples so style stays per-language.
+    private func transcribedLanguage() -> String? {
+        if let detectedLanguage, !detectedLanguage.isEmpty {
+            return LanguageDetector.normalize(detectedLanguage)
+        }
+        // A single selected language pins every recording to it.
+        let codes = selectedLanguageCodes()
+        guard codes.count == 1, let only = codes.first, !only.isEmpty else { return nil }
+        return LanguageDetector.normalize(only)
     }
 
     /// Language labels to hand `RewriteService` for cross-language repair.
