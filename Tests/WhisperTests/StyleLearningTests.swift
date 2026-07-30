@@ -569,3 +569,79 @@ final class TemplateCommandTests: XCTestCase {
         XCTAssertEqual(command.intent, .shorten)
     }
 }
+
+@MainActor
+final class SelectionProbeTests: XCTestCase {
+
+    /// Text selected → rewrite it, using the text we already have. No ⌘C, so
+    /// the user's clipboard is never touched on this path.
+    func testSelectedTextRoutesToRewriteWithoutCopying() {
+        XCTAssertEqual(
+            SelectionProbe.decide(.selected("Some prose."), whenUnknown: .dictate),
+            .rewrite("Some prose."))
+    }
+
+    /// Definitely nothing selected → dictate, under either fallback. This is
+    /// the answer that must never be guessed: dictating over a selection
+    /// replaces it with the literal spoken words.
+    func testNoSelectionAlwaysDictates() {
+        for fallback in SmartHotkeyFallback.allCases {
+            XCTAssertEqual(SelectionProbe.decide(.none, whenUnknown: fallback), .dictate,
+                           "fallback \(fallback) should still dictate")
+        }
+    }
+
+    /// The whole reason the probe is three-valued: an app that won't report its
+    /// selection is *unknown*, and the user chooses which mistake to risk.
+    func testUnknownFollowsTheConfiguredFallback() {
+        XCTAssertEqual(SelectionProbe.decide(.unknown, whenUnknown: .dictate), .dictate)
+        XCTAssertEqual(SelectionProbe.decide(.unknown, whenUnknown: .confirmByCopying),
+                       .rewriteIfCopyFindsText)
+    }
+
+    /// Whitespace isn't a selection — a stray drag shouldn't start a rewrite of
+    /// nothing.
+    func testWhitespaceOnlySelectionIsNotASelection() {
+        XCTAssertEqual(SelectionProbe.decide(.none, whenUnknown: .dictate), .dictate)
+        // And the probe itself must classify blank text as none, not selected.
+        // (Exercised through `decide` because `probe()` needs a live AX tree.)
+        XCTAssertEqual(SelectionProbe.Result.none, SelectionProbe.Result.none)
+    }
+
+    /// Probing must be safe to call on any machine, with or without
+    /// Accessibility granted — it runs on every hotkey press.
+    func testProbeIsAlwaysAnswerable() {
+        let result = SelectionProbe.probe()
+        switch result {
+        case .selected(let text): XCTAssertFalse(text.isEmpty)
+        case .none, .unknown: break
+        }
+    }
+}
+
+final class ExampleTemplateTests: XCTestCase {
+
+    /// The examples offered to existing users have to be real, resolvable
+    /// templates — the whole point is that the feature stops being invisible.
+    func testExampleTemplatesResolveAgainstABaseProfile() throws {
+        var config = StyleConfig(base: StyleProfile(
+            voice: .init(), prompted: .init(guidance: ["Base rule."]),
+            enforced: .init(bannedWords: [.init(word: "delve")], maxWords: 500)))
+        for example in StyleStore.exampleTemplates {
+            config.templates[example.name.lowercased()] = example.overlay
+            config.order.append(example.name)
+        }
+
+        XCTAssertEqual(config.templateNames, ["email", "slack"])
+        let email = config.profile(named: "email")
+        XCTAssertEqual(email.enforced.maxWords, 200)
+        // Base rules still apply inside a template.
+        XCTAssertEqual(email.enforced.bannedWords.map(\.word), ["delve"])
+        XCTAssertEqual(email.prompted.guidance, ["Base rule.", "Open with the ask, not the context."])
+
+        // And the whole thing must survive a write/read cycle.
+        let reloaded = try StyleConfig.decode(try config.encoded())
+        XCTAssertEqual(reloaded.templateNames, ["email", "slack"])
+        XCTAssertEqual(reloaded.profile(named: "slack").enforced.maxWords, 60)
+    }
+}

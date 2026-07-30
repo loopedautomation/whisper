@@ -348,9 +348,14 @@ private struct HotkeysTab: View {
     @ObservedObject var coordinator: Coordinator
     @State private var fnEnabled = d.bool(forKey: PrefKey.fnEnabled)
     @State private var fnMode = d.string(forKey: PrefKey.fnMode) ?? FnMode.holdPTT.rawValue
+    @State private var smartHotkey = d.bool(forKey: PrefKey.smartRewriteHotkey)
+    @State private var smartFallback = d.string(forKey: PrefKey.smartRewriteFallback)
+        ?? SmartHotkeyFallback.dictate.rawValue
 
     private var isDirty: Bool {
         fnEnabled != d.bool(forKey: PrefKey.fnEnabled) || fnMode != d.string(forKey: PrefKey.fnMode)
+        || smartHotkey != d.bool(forKey: PrefKey.smartRewriteHotkey)
+        || smartFallback != d.string(forKey: PrefKey.smartRewriteFallback)
     }
 
     var body: some View {
@@ -359,12 +364,23 @@ private struct HotkeysTab: View {
                 KeyboardShortcuts.Recorder("Push to talk (hold):", name: .pushToTalk)
                 KeyboardShortcuts.Recorder("Toggle recording:", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Rewrite selection (hold):", name: .rewriteSelection)
+                Toggle("Push-to-talk rewrites a selection", isOn: $smartHotkey)
+                Picker("If an app won't say", selection: $smartFallback) {
+                    ForEach(SmartHotkeyFallback.allCases) { Text($0.label).tag($0.rawValue) }
+                }
+                .disabled(!smartHotkey)
                 Toggle("Use the fn / Globe key", isOn: $fnEnabled)
                 Picker("fn action", selection: $fnMode) {
                     ForEach(FnMode.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .disabled(!fnEnabled)
             }
+
+            Text(smartHotkey
+                 ? "With this on, your push-to-talk key rewrites whatever text is selected and only dictates when nothing is — so you don't need a separate key. The selection is read through Accessibility, which doesn't touch your clipboard. Some apps (Electron ones especially) won't report their selection; the setting above decides what happens then. The dedicated Rewrite shortcut keeps working either way."
+                 : "Your push-to-talk key always dictates. Turn the toggle on to have it rewrite a selection instead when you have text selected.")
+                .font(.caption).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
             Text("Standard shortcuts save automatically. macOS uses double-tap fn for Dictation — set System Settings → Keyboard → “Press 🌐 to” → Do Nothing to avoid conflicts. The fn key may not work on non-Apple keyboards, so keep a standard shortcut as a fallback.")
                 .font(.caption).foregroundStyle(.secondary)
@@ -376,6 +392,8 @@ private struct HotkeysTab: View {
             SaveBar(disabled: !isDirty) {
                 d.set(fnEnabled, forKey: PrefKey.fnEnabled)
                 d.set(fnMode, forKey: PrefKey.fnMode)
+                d.set(smartHotkey, forKey: PrefKey.smartRewriteHotkey)
+                d.set(smartFallback, forKey: PrefKey.smartRewriteFallback)
                 coordinator.configureFnMonitor()
             }
         }
@@ -859,16 +877,7 @@ private struct StyleTab: View {
                 Label("style.json loaded", systemImage: "checkmark.circle.fill")
                     .foregroundStyle(.green)
 
-                if !config.templateNames.isEmpty {
-                    Picker("Default template", selection: defaultTemplateBinding) {
-                        Text(StyleConfig.baseName).tag("")
-                        ForEach(config.templateNames, id: \.self) { Text($0).tag($0) }
-                    }
-                    .pickerStyle(.menu).frame(maxWidth: 320)
-                    Text("Used when you don't name one. Say \"style it as \(config.templateNames[0].lowercased())\" to pick a different one for a single rewrite.")
-                        .font(.caption).foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                templatesSection(config)
 
                 let rules = SelectionRewriter.mechanicalRules(config.defaultProfile.enforced)
                 if rules.isEmpty {
@@ -900,6 +909,43 @@ private struct StyleTab: View {
                 d.set(provider, forKey: PrefKey.selectionRewriteProvider)
                 d.set(model, forKey: PrefKey.selectionRewriteModel)
                 d.set(baseURL, forKey: PrefKey.selectionRewriteBaseURL)
+            }
+        }
+    }
+
+    /// Templates, shown whether or not any exist.
+    ///
+    /// Hiding this when the list is empty is how the feature became invisible:
+    /// anyone whose `style.json` predates templates never got the starter
+    /// examples, so there was nothing on screen to reveal that templates were
+    /// a thing at all.
+    @ViewBuilder
+    private func templatesSection(_ config: StyleConfig) -> some View {
+        if config.templateNames.isEmpty {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Templates").font(.subheadline.bold())
+                Text("Separate profiles for different kinds of writing — an email voice, a Slack voice — each adding to your base rules. Name one while you speak (\"style it as an email\"), or set a default here.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Add example templates") { style.addExampleTemplates() }
+                    .help("Adds Email and Slack templates to style.json, which you can then edit")
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 4) {
+                Picker("Default template", selection: defaultTemplateBinding) {
+                    Text(StyleConfig.baseName).tag("")
+                    ForEach(config.templateNames, id: \.self) { Text($0).tag($0) }
+                }
+                .pickerStyle(.menu).frame(maxWidth: 320)
+                Text("Used when you don't name one. Say \"style it as \(config.templateNames[0].lowercased())\" to pick a different one for a single rewrite.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if StyleStore.exampleTemplates.contains(where: {
+                    config.templates[$0.name.lowercased()] == nil
+                }) {
+                    Button("Add example templates") { style.addExampleTemplates() }
+                        .font(.caption).buttonStyle(.link)
+                }
             }
         }
     }
