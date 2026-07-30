@@ -1,0 +1,83 @@
+name: Build
+
+# Produces a downloadable .app you can install straight from CI.
+#
+# Distinct from release.yml, which signs with a Developer ID, notarizes, and
+# publishes to a GitHub Release + the Homebrew tap. That one needs Apple
+# credentials in repository secrets; this one needs nothing, so it also runs on
+# a branch or a fork, before those secrets are in play. The trade-off is that
+# the app is ad-hoc signed — see the "How to install" summary it prints.
+#
+# Tests are deliberately not run here: test.yml already runs `swift test` on
+# every pull request and every push to main, and duplicating it would pay for
+# the same macOS runner twice.
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    name: App
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Select Xcode (Swift 6+)
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: latest-stable
+
+      - name: Install build tools
+        run: brew install xcodegen
+
+      # No signing identity is imported, so scripts/build-app.sh falls back to
+      # ad-hoc signing. That's enough to run locally; it is not enough to
+      # distribute, which is what release.yml is for.
+      - name: Build app
+        run: make build
+
+      - name: Package
+        run: |
+          set -euo pipefail
+          VERSION="$(python3 -c "import json;print(json.load(open('package.json'))['version'])")"
+          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
+          # ditto rather than zip, to preserve the bundle's symlinks and flags.
+          ditto -c -k --keepParent "build/LoopedWhisper.app" "LoopedWhisper-${VERSION}-unsigned.zip"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: LoopedWhisper-${{ env.VERSION }}-unsigned
+          path: LoopedWhisper-*-unsigned.zip
+          if-no-files-found: error
+
+      - name: How to install
+        run: |
+          cat >> "$GITHUB_STEP_SUMMARY" <<'EOF'
+          ## Installing this build
+
+          Download the artifact below, unzip it, and move `LoopedWhisper.app` to
+          `/Applications`.
+
+          This app is **ad-hoc signed, not notarized**, so macOS will refuse to
+          open it on the first try. Clear the download quarantine flag:
+
+          ```bash
+          xattr -dr com.apple.quarantine /Applications/LoopedWhisper.app
+          open /Applications/LoopedWhisper.app
+          ```
+
+          Two consequences of ad-hoc signing worth knowing:
+
+          - **Permissions won't carry over.** macOS identifies the app by its
+            signature, and each CI build gets a fresh ad-hoc one — so
+            Microphone, Accessibility and Input Monitoring have to be granted
+            again after every install, and the stale entries should be removed
+            from System Settings first.
+          - **It won't auto-update.** The Homebrew cask tracks notarized
+            releases, not these artifacts.
+
+          For a build that installs cleanly and updates through Homebrew, use
+          the Release workflow instead — it needs Apple Developer credentials in
+          repository secrets.
+          EOF
