@@ -223,7 +223,7 @@ final class Coordinator: ObservableObject {
         switch mode {
         case .holdPTT:
             fnMonitor.onDown = { [weak self] in self?.beginRecording() }
-            fnMonitor.onUp = { [weak self] in self?.endRecording() }
+            fnMonitor.onUp = { [weak self] in self?.endHeldRecording() }
             fnMonitor.onDoubleTap = nil
         case .doubleTapToggle:
             fnMonitor.onDown = nil
@@ -268,9 +268,43 @@ final class Coordinator: ObservableObject {
 
     // MARK: - recording control
 
+    /// Which pipeline a running recording belongs to.
+    ///
+    /// Exists because one key can now start either of them. Deciding this in a
+    /// pure function keeps it testable — the hotkey wiring itself can't be
+    /// unit-tested, and that is precisely where the stuck-recording bug lived.
+    enum RunningPipeline: Equatable {
+        case dictation
+        case selectionRewrite
+        case nothing
+    }
+
+    /// What a hold-key release should end.
+    ///
+    /// The rule that matters: whatever key-down started, key-up must finish.
+    /// Before this existed, `endRecording` refused to act while a selection
+    /// rewrite was live — correct when the two pipelines had separate keys,
+    /// catastrophic once one key could enter either, because the release then
+    /// matched neither and the recorder ran forever.
+    static func pipelineToEnd(isRecording: Bool, selectionRewriteActive: Bool) -> RunningPipeline {
+        guard isRecording else { return .nothing }
+        return selectionRewriteActive ? .selectionRewrite : .dictation
+    }
+
+    /// Ends whichever recording is actually running. Every hold-key release and
+    /// the toggle both go through here, so none of them can pick the wrong one.
+    func endHeldRecording(silent: Bool = false) {
+        switch Coordinator.pipelineToEnd(isRecording: state.isRecording,
+                                        selectionRewriteActive: selectionRewriteActive) {
+        case .selectionRewrite: endSelectionRewrite()
+        case .dictation: endRecording(silent: silent)
+        case .nothing: break
+        }
+    }
+
     func toggleRecording() {
         SoundService.play(.toggle)
-        if state.isRecording { endRecording(silent: true) } else { beginRecording(silent: true) }
+        if state.isRecording { endHeldRecording(silent: true) } else { beginRecording(silent: true) }
     }
 
     /// Records the app the user is working in, so keystrokes land there later
