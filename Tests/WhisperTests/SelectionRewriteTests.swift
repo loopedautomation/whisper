@@ -640,3 +640,54 @@ final class OnDeviceModelClientTests: XCTestCase {
         XCTAssertFalse(state.summary.isEmpty)
     }
 }
+
+@MainActor
+final class RecordingPipelineTests: XCTestCase {
+
+    /// The bug this exists to prevent: with the smart hotkey on, push-to-talk
+    /// can *start* a selection rewrite, so its release has to end that — not
+    /// dictation. `endRecording` used to refuse while a rewrite was live, which
+    /// was right when the two pipelines had separate keys and catastrophic once
+    /// one key could enter either: the release matched neither and the recorder
+    /// ran forever, leaving the microphone on with nothing holding it.
+    func testReleaseEndsTheSelectionRewriteItStarted() {
+        XCTAssertEqual(
+            Coordinator.pipelineToEnd(isRecording: true, selectionRewriteActive: true),
+            .selectionRewrite)
+    }
+
+    func testReleaseEndsDictationWhenThatIsWhatIsRunning() {
+        XCTAssertEqual(
+            Coordinator.pipelineToEnd(isRecording: true, selectionRewriteActive: false),
+            .dictation)
+    }
+
+    /// A stray release with nothing running must be a no-op, not an attempt to
+    /// stop a recorder that was never started.
+    func testReleaseWithNothingRunningDoesNothing() {
+        XCTAssertEqual(
+            Coordinator.pipelineToEnd(isRecording: false, selectionRewriteActive: false),
+            .nothing)
+        // Even if the flag is somehow set without a recording in progress.
+        XCTAssertEqual(
+            Coordinator.pipelineToEnd(isRecording: false, selectionRewriteActive: true),
+            .nothing)
+    }
+
+    /// Exhaustive, because there are only four states and one of them shipped
+    /// broken. Every combination must resolve to exactly one action.
+    func testEveryStateResolves() {
+        for recording in [true, false] {
+            for rewriting in [true, false] {
+                let result = Coordinator.pipelineToEnd(isRecording: recording,
+                                                      selectionRewriteActive: rewriting)
+                if recording {
+                    XCTAssertNotEqual(result, .nothing,
+                                      "a live recording must always be endable")
+                } else {
+                    XCTAssertEqual(result, .nothing)
+                }
+            }
+        }
+    }
+}

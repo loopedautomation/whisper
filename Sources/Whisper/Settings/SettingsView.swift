@@ -352,10 +352,10 @@ private struct HotkeysTab: View {
     @State private var smartFallback = d.string(forKey: PrefKey.smartRewriteFallback)
         ?? SmartHotkeyFallback.dictate.rawValue
 
+    /// The smart-hotkey settings write themselves, so only the fn options
+    /// participate in Save.
     private var isDirty: Bool {
         fnEnabled != d.bool(forKey: PrefKey.fnEnabled) || fnMode != d.string(forKey: PrefKey.fnMode)
-        || smartHotkey != d.bool(forKey: PrefKey.smartRewriteHotkey)
-        || smartFallback != d.string(forKey: PrefKey.smartRewriteFallback)
     }
 
     var body: some View {
@@ -364,11 +364,19 @@ private struct HotkeysTab: View {
                 KeyboardShortcuts.Recorder("Push to talk (hold):", name: .pushToTalk)
                 KeyboardShortcuts.Recorder("Toggle recording:", name: .toggleRecording)
                 KeyboardShortcuts.Recorder("Rewrite selection (hold):", name: .rewriteSelection)
+                // Applied on the spot rather than on Save: a switch that looks
+                // like it took effect and didn't is worse than no switch.
                 Toggle("Push-to-talk rewrites a selection", isOn: $smartHotkey)
+                    .onChange(of: smartHotkey) { _, new in
+                        d.set(new, forKey: PrefKey.smartRewriteHotkey)
+                    }
                 Picker("If an app won't say", selection: $smartFallback) {
                     ForEach(SmartHotkeyFallback.allCases) { Text($0.label).tag($0.rawValue) }
                 }
                 .disabled(!smartHotkey)
+                .onChange(of: smartFallback) { _, new in
+                    d.set(new, forKey: PrefKey.smartRewriteFallback)
+                }
                 Toggle("Use the fn / Globe key", isOn: $fnEnabled)
                 Picker("fn action", selection: $fnMode) {
                     ForEach(FnMode.allCases) { Text($0.label).tag($0.rawValue) }
@@ -392,8 +400,6 @@ private struct HotkeysTab: View {
             SaveBar(disabled: !isDirty) {
                 d.set(fnEnabled, forKey: PrefKey.fnEnabled)
                 d.set(fnMode, forKey: PrefKey.fnMode)
-                d.set(smartHotkey, forKey: PrefKey.smartRewriteHotkey)
-                d.set(smartFallback, forKey: PrefKey.smartRewriteFallback)
                 coordinator.configureFnMonitor()
             }
         }

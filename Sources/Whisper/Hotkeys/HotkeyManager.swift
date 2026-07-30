@@ -44,7 +44,9 @@ final class HotkeyManager {
             self?.coordinator?.beginRecording()
         }
         KeyboardShortcuts.onKeyUp(for: .pushToTalk) { [weak self] in
-            self?.coordinator?.endRecording()
+            // Ends whichever pipeline the key-down started: with the smart
+            // hotkey on, this same key may have begun a selection rewrite.
+            self?.coordinator?.endHeldRecording()
         }
         KeyboardShortcuts.onKeyDown(for: .toggleRecording) { [weak self] in
             self?.coordinator?.toggleRecording()
