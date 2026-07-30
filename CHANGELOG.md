@@ -1,5 +1,31 @@
 # looped-whisper
 
+## 0.11.0
+
+### Minor Changes
+
+- 45180ff: Learn style **per language**, and understand commands in German, French and Spanish.
+
+  Style was previously one profile across every language. That's fine while the corpus is empty, but once you've accumulated English samples, rewriting a German paragraph handed the model English samples labelled as your voice — dragging the result toward English rhythm and vocabulary. Worse than sending no samples at all.
+
+  Samples now record the language they're written in, detected on-device (and taken from transcription, which already knows). Retrieval only offers samples in the passage's language: no German samples means generic prose, which is the honest outcome. Readiness is reported per language too, so Settings → Style says "matching your style in English, still learning in German" instead of one number that promises a match it can't deliver. Punctuation rules are mined from a single language, since German „quotes" and French guillemets are conventions, not habits to be overridden by English evidence. Existing corpora have their languages filled in on first load.
+
+  Commands also work properly in German, French and Spanish now: _"mach es kürzer"_ lands on the same intent as _"make it shorter"_, negation isn't inverted (_"weniger formell"_ means less formal, not more), and accented characters survive the normalizer. Anything in another language still falls through to the model verbatim, as before.
+
+- ed974e9: Make style templates discoverable, and let one hotkey do both jobs.
+
+  **Templates were invisible to existing users.** The starter file demonstrating them is only written when no `style.json` exists, so anyone who already had one never received the examples — and the Settings picker hid itself when there were no templates, leaving nothing on screen to suggest the feature existed. The Style tab now always shows a Templates section, with a button that writes the Email and Slack examples straight into your config.
+
+  **Push-to-talk can now rewrite a selection.** Turn on "Push-to-talk rewrites a selection" in Settings → Hotkeys and your dictation key rewrites whatever text is selected, dictating only when nothing is. No second shortcut to remember.
+
+  Whether text is selected is read through the Accessibility API rather than guessed, because guessing wrong destroys text in both directions: a false positive rewrites something while you meant to dictate, and a false negative replaces your selected paragraph with the words you just spoke. When Accessibility answers, the selection is used directly and **your clipboard is never touched at all** — no copy, no paste. Some apps (Electron ones especially) won't report their selection; that case is reported as _unknown_ rather than assumed either way, and a second setting decides whether to dictate or confirm by copying. The dedicated ⌃⌥E shortcut keeps working regardless, and the whole thing is off by default since it changes what an existing key does.
+
+### Patch Changes
+
+- 76e088d: Pin the rewrite's output language to the passage. The instruction sent to the model is written in English whatever language you selected, and nothing previously told the model to keep the passage's language — so a German selection could come back rewritten into English, most likely with the smaller on-device model. The rule is now unconditional, and when the language is identified it's named explicitly as well.
+
+  This also means you don't need to speak the language you're writing in: say "style it" in English over a German selection and you get your German style, in German. The style is chosen by the selected text, not by the command.
+
 ## 0.10.0
 
 ### Minor Changes
