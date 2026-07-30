@@ -4,7 +4,7 @@ import AVFoundation
 import AppKit
 
 /// Orchestrates the full capture pipeline:
-/// record → (realtime live caption) → transcribe → (rewrite) → clipboard/paste.
+/// record → (realtime live caption) → transcribe → (language repair) → clipboard/paste.
 @MainActor
 final class Coordinator: ObservableObject {
     let state: AppState
@@ -83,6 +83,9 @@ final class Coordinator: ObservableObject {
     }
 
     func bootstrap() {
+        // Before registerDefaults: the migration detects "never configured" by
+        // an absent value, which registering defaults would paper over.
+        DefaultPref.migrateLegacyAIConfig()
         DefaultPref.registerDefaults()
         permissions.refresh()
         loginItem.refresh()
@@ -464,7 +467,7 @@ final class Coordinator: ObservableObject {
                 hint: "fix it in Settings → Style, then try again"))
             return
         }
-        guard selectionRewriteConfig() != nil else {
+        guard aiConfig() != nil else {
             state.setError(unconfiguredError())
             return
         }
@@ -598,7 +601,7 @@ final class Coordinator: ObservableObject {
                                     hint: "fix it in Settings → Style, then try again"))
             return
         }
-        guard selectionRewriteConfig() != nil else {
+        guard aiConfig() != nil else {
             state.setError(unconfiguredError())
             return
         }
@@ -674,7 +677,7 @@ final class Coordinator: ObservableObject {
                                     hint: "fix it in Settings → Style, then try again"))
             return
         }
-        guard let config = selectionRewriteConfig() else {
+        guard let config = aiConfig() else {
             state.setError(unconfiguredError())
             return
         }
@@ -903,20 +906,16 @@ final class Coordinator: ObservableObject {
             }
 
             var finalText = raw
-            let rewriteOn = UserDefaults.standard.bool(forKey: PrefKey.rewriteEnabled)
             let languageHint = languageRepairHint()
-            // Language repair rides the same rewrite call so a recording never
-            // pays for two LLM round-trips: if general rewrite is off, fall back
-            // to a pass-through template so only the repair instruction applies.
-            if rewriteOn || !languageHint.isEmpty, let cfg = rewriteConfig() {
+            // Dictation is delivered as transcribed. The only LLM pass left over
+            // a transcript is language repair, which is opt-in and only runs
+            // when a cross-language mixup was actually detected.
+            if !languageHint.isEmpty, let cfg = aiConfig() {
                 state.setStatus(.rewriting)
-                let effectiveConfig = rewriteOn ? cfg : RewriteService.Config(
-                    provider: cfg.provider, model: cfg.model, apiKey: cfg.apiKey,
-                    promptTemplate: RewriteService.languageRepairOnlyTemplate, timeout: cfg.timeout)
                 let outcome = await RewriteService.rewriteResult(
-                    raw, vocabulary: vocabulary.terms, config: effectiveConfig, languageHint: languageHint)
+                    raw, vocabulary: vocabulary.terms, config: cfg, languageHint: languageHint)
                 if let failure = outcome.failure {
-                    // Rewrite failed: deliver the raw transcript but tell the user why.
+                    // Repair failed: deliver the raw transcript but tell the user why.
                     state.setError(AppError(failure, hint: "delivered the raw transcript instead"))
                 }
                 finalText = outcome.text
@@ -1067,7 +1066,7 @@ final class Coordinator: ObservableObject {
         }
         guard UserDefaults.standard.bool(forKey: PrefKey.quickActionsLLMFallback),
               transcript.count < 200,   // long dictation is never a command
-              let cfg = rewriteConfig() else { return nil }
+              let cfg = aiConfig() else { return nil }
         state.setStatus(.rewriting)
         guard let match = await QuickActionClassifier.classify(transcript, actions: actions, config: cfg),
               let action = actions.first(where: { $0.id == match.actionID }) else { return nil }
@@ -1079,34 +1078,27 @@ final class Coordinator: ObservableObject {
     /// advice when the real answer is a System Settings toggle.
     private func unconfiguredError() -> AppError {
         let pref = RewriteProvider(
-            rawValue: UserDefaults.standard.string(forKey: PrefKey.selectionRewriteProvider) ?? "")
+            rawValue: UserDefaults.standard.string(forKey: PrefKey.aiProvider) ?? "")
             ?? .anthropic
         guard pref == .appleOnDevice else {
             return AppError("No rewrite model configured",
-                            hint: "add an API key or a local model URL in Settings → Style")
+                            hint: "add an API key or a local model URL in Settings → AI")
         }
         let state = OnDeviceModelClient.availability()
         return AppError(state.summary, hint: state.recovery)
     }
 
-    /// Provider settings for the selection rewrite. Separate from the dictation
-    /// cleanup config so the two can point at different models — a fast local
-    /// one for transcript tidying, a stronger one for rewriting your prose (or
-    /// the reverse, if the selection is private and should stay on-device).
-    struct SelectionModel {
-        var provider: RewriteService.Provider
-        var model: String
-        var apiKey: String
-    }
-
-    /// `nil` when nothing usable is configured, which the caller turns into an
+    /// The one model configuration, shared by every caller that needs an LLM:
+    /// selection rewrite, language repair, and quick-action classification.
+    ///
+    /// `nil` when nothing usable is configured, which callers turn into an
     /// actionable error rather than a silent no-op.
-    private func selectionRewriteConfig() -> SelectionModel? {
+    private func aiConfig() -> RewriteService.Config? {
         let defaults = UserDefaults.standard
-        let model = defaults.string(forKey: PrefKey.selectionRewriteModel) ?? ""
+        let model = defaults.string(forKey: PrefKey.aiModel) ?? ""
         let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
         let providerPref = RewriteProvider(
-            rawValue: defaults.string(forKey: PrefKey.selectionRewriteProvider) ?? "") ?? .anthropic
+            rawValue: defaults.string(forKey: PrefKey.aiProvider) ?? "") ?? .anthropic
         // Every provider but the on-device one is identified by a model name.
         guard providerPref == .appleOnDevice || !model.isEmpty else { return nil }
         switch providerPref {
@@ -1115,37 +1107,17 @@ final class Coordinator: ObservableObject {
             // model is actually usable, so an unavailable state surfaces as a
             // specific error rather than a generic "not configured".
             guard OnDeviceModelClient.availability().isAvailable else { return nil }
-            return SelectionModel(provider: .appleOnDevice, model: "", apiKey: "")
+            return RewriteService.Config(provider: .appleOnDevice, model: "", apiKey: "")
         case .anthropic:
             guard !key.isEmpty else { return nil }
-            return SelectionModel(provider: .anthropic, model: model, apiKey: key)
+            return RewriteService.Config(provider: .anthropic, model: model, apiKey: key)
         case .openaiCompatible:
             // Locally-hosted servers need a URL but usually no key, so an empty
             // key is fine here — it just isn't sent.
-            let base = defaults.string(forKey: PrefKey.selectionRewriteBaseURL) ?? ""
+            let base = defaults.string(forKey: PrefKey.aiBaseURL) ?? ""
             guard !base.isEmpty else { return nil }
-            return SelectionModel(provider: .openaiCompatible(baseURL: base), model: model, apiKey: key)
+            return RewriteService.Config(
+                provider: .openaiCompatible(baseURL: base), model: model, apiKey: key)
         }
-    }
-
-    private func rewriteConfig() -> RewriteService.Config? {
-        let key = Keychain.get(account: RewriteService.keychainAccount) ?? ""
-        let providerPref = RewriteProvider(rawValue: UserDefaults.standard.string(forKey: PrefKey.rewriteProvider) ?? "") ?? .anthropic
-        // The on-device model needs no key; the HTTP providers do.
-        guard providerPref == .appleOnDevice || !key.isEmpty else { return nil }
-        let model = UserDefaults.standard.string(forKey: PrefKey.rewriteModel) ?? "claude-haiku-4-5-20251001"
-        let template = UserDefaults.standard.string(forKey: PrefKey.rewritePrompt) ?? DefaultPref.rewritePromptTemplate
-        let provider: RewriteService.Provider
-        switch providerPref {
-        case .anthropic:
-            provider = .anthropic
-        case .openaiCompatible:
-            let base = UserDefaults.standard.string(forKey: PrefKey.rewriteBaseURL) ?? "https://api.openai.com/v1"
-            provider = .openaiCompatible(baseURL: base)
-        case .appleOnDevice:
-            guard OnDeviceModelClient.availability().isAvailable else { return nil }
-            provider = .appleOnDevice
-        }
-        return RewriteService.Config(provider: provider, model: model, apiKey: key, promptTemplate: template)
     }
 }

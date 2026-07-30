@@ -11,19 +11,14 @@ enum PrefKey {
     static let realtimeInsertion = "realtimeInsertion"    // "incremental" | "onStop"
     static let fnEnabled = "fnEnabled"
     static let fnMode = "fnMode"                           // "holdPTT" | "doubleTapToggle"
-    static let rewriteEnabled = "rewriteEnabled"
-    static let rewriteProvider = "rewriteProvider"        // "anthropic" | "openaiCompatible"
-    static let rewriteModel = "rewriteModel"
-    static let rewriteBaseURL = "rewriteBaseURL"          // for openaiCompatible
-    static let rewritePrompt = "rewritePrompt"            // user prompt template, uses {{input}}
+    // One model configuration, shared by everything that talks to an LLM:
+    // selection rewrite, language repair, and quick-action classification.
+    static let aiProvider = "aiProvider"                  // "anthropic" | "openaiCompatible" | "appleOnDevice"
+    static let aiModel = "aiModel"
+    static let aiBaseURL = "aiBaseURL"                    // for openaiCompatible (e.g. a local server)
     static let language = "language"                       // legacy single-language hint, "" = auto
     static let preferredLanguages = "preferredLanguages"   // comma-joined ISO codes; empty = auto-detect all
-    static let languageRepairEnabled = "languageRepairEnabled"   // opt-in: AI-repair cross-language mixups (sends transcript to your Rewrite provider); off by default to stay fully local
-    // Selection rewrite ("rewrite my selection"): copy the selection, speak an
-    // instruction, paste the rewrite back in place.
-    static let selectionRewriteModel = "selectionRewriteModel"
-    static let selectionRewriteProvider = "selectionRewriteProvider"   // "anthropic" | "openaiCompatible"
-    static let selectionRewriteBaseURL = "selectionRewriteBaseURL"     // for openaiCompatible (e.g. a local model)
+    static let languageRepairEnabled = "languageRepairEnabled"   // opt-in: AI-repair cross-language mixups (sends transcript to your AI provider); off by default to stay fully local
     static let smartRewriteHotkey = "smartRewriteHotkey"             // one key: rewrite a selection, else dictate
     static let smartRewriteFallback = "smartRewriteFallback"         // what to do when an app won't report its selection
     static let styleLearningEnabled = "styleLearningEnabled"           // harvest your writing to match your voice over time
@@ -32,7 +27,7 @@ enum PrefKey {
     static let inputDeviceUID = "inputDeviceUID"          // audio input device UID, "" = system default
     static let soundVolume = "soundVolume"                // 0.0...1.0
     static let quickActionsEnabled = "quickActionsEnabled"        // opt-in voice quick actions
-    static let quickActionsLLMFallback = "quickActionsLLMFallback" // opt-in: AI intent detection when no trigger matches (sends transcript to your Rewrite provider)
+    static let quickActionsLLMFallback = "quickActionsLLMFallback" // opt-in: AI intent detection when no trigger matches (sends transcript to your AI provider)
     static let quickActionsModifier = "quickActionsModifier"      // modifier held at recording start to arm quick actions; "none" = always armed
 }
 
@@ -98,11 +93,12 @@ enum RewriteProvider: String, CaseIterable, Identifiable {
         case .appleOnDevice: return "Apple Intelligence (on-device)"
         }
     }
-    /// Sensible default model per provider — fast, low-cost tiers suited to
-    /// transcript cleanup. The on-device model isn't chosen by name.
+    /// Sensible default model per provider. Rewriting your prose is the
+    /// demanding job this config serves, so the default is a capable tier
+    /// rather than the cheapest one. The on-device model isn't chosen by name.
     var defaultModel: String {
         switch self {
-        case .anthropic: return "claude-haiku-4-5-20251001"
+        case .anthropic: return "claude-opus-4-8"
         case .openaiCompatible: return "gpt-5.4-mini"
         case .appleOnDevice: return ""
         }
@@ -199,16 +195,44 @@ enum LanguageSelection: Equatable {
 
 /// Defaults applied on first launch.
 enum DefaultPref {
-    /// Default user-prompt template. `{{input}}` is replaced with the transcript.
-    /// The system prompt (which also injects the vocabulary list) is controlled
-    /// by the app, not the user.
-    static let rewritePromptTemplate = """
-    Clean up the following speech-to-text transcript. Fix typos, punctuation, and \
-    capitalization without changing the meaning or adding content. Return only the \
-    corrected transcript.
 
-    {{input}}
-    """
+    /// Folds the two old model configurations into `ai*`.
+    ///
+    /// Until now the app carried a `rewrite*` config (LLM cleanup of every
+    /// dictated transcript, since removed) and a `selectionRewrite*` one, which
+    /// happened to share a single Keychain entry. Users who upgrade have one or
+    /// both set, and silently reverting them to defaults would look like the
+    /// app forgot their API setup.
+    ///
+    /// `selectionRewrite*` wins: it configures the feature that survives, so
+    /// it's the one the user chose deliberately and most recently. The Keychain
+    /// account is deliberately *not* renamed — the key lives under
+    /// `rewrite-api-key` and moving it would strand it.
+    ///
+    /// Must run before `registerDefaults()`, which populates the registration
+    /// domain and would make the "never set" check below read as "already set".
+    static func migrateLegacyAIConfig(_ d: UserDefaults = .standard) {
+        guard d.object(forKey: PrefKey.aiProvider) == nil else { return }
+
+        let legacy: [(provider: String, model: String, baseURL: String)] = [
+            ("selectionRewriteProvider", "selectionRewriteModel", "selectionRewriteBaseURL"),
+            ("rewriteProvider", "rewriteModel", "rewriteBaseURL")
+        ]
+        for keys in legacy {
+            guard let provider = d.string(forKey: keys.provider) else { continue }
+            d.set(provider, forKey: PrefKey.aiProvider)
+            if let model = d.string(forKey: keys.model) { d.set(model, forKey: PrefKey.aiModel) }
+            if let base = d.string(forKey: keys.baseURL) { d.set(base, forKey: PrefKey.aiBaseURL) }
+            break
+        }
+
+        // Drop the old keys either way, so a later downgrade-then-upgrade can't
+        // resurrect a stale config over the migrated one.
+        for keys in legacy {
+            [keys.provider, keys.model, keys.baseURL].forEach(d.removeObject(forKey:))
+        }
+        ["rewriteEnabled", "rewritePrompt"].forEach(d.removeObject(forKey:))
+    }
 
     static func registerDefaults() {
         var defaults: [String: Any] = [:]
@@ -227,14 +251,9 @@ enum DefaultPref {
             PrefKey.realtimeInsertion: RealtimeInsertion.onStop.rawValue,
             PrefKey.fnEnabled: false,
             PrefKey.fnMode: FnMode.holdPTT.rawValue,
-            PrefKey.rewriteEnabled: false,
-            PrefKey.rewriteProvider: RewriteProvider.anthropic.rawValue,
-            PrefKey.rewriteModel: "claude-haiku-4-5-20251001",
-            PrefKey.rewriteBaseURL: "https://api.openai.com/v1",
-            PrefKey.rewritePrompt: DefaultPref.rewritePromptTemplate,
-            PrefKey.selectionRewriteProvider: RewriteProvider.anthropic.rawValue,
-            PrefKey.selectionRewriteModel: "claude-opus-4-8",
-            PrefKey.selectionRewriteBaseURL: "http://localhost:11434/v1",   // Ollama's default
+            PrefKey.aiProvider: RewriteProvider.anthropic.rawValue,
+            PrefKey.aiModel: RewriteProvider.anthropic.defaultModel,
+            PrefKey.aiBaseURL: "http://localhost:11434/v1",   // Ollama's default
             PrefKey.smartRewriteHotkey: false,   // opt-in: it changes what the dictation key does
             PrefKey.smartRewriteFallback: SmartHotkeyFallback.dictate.rawValue,
             PrefKey.styleLearningEnabled: true,
