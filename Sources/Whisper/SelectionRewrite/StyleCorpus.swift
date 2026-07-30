@@ -42,6 +42,11 @@ struct StyleSample: Codable, Equatable, Sendable {
     var register: StyleRegister
     var source: StyleSampleSource
     var addedAt: Date
+    /// ISO 639-1 code, or `nil` when detection wasn't confident.
+    ///
+    /// Optional so corpus files written before this existed still decode; they
+    /// get their language filled in on first load.
+    var language: String?
 }
 
 /// A rewrite the user then edited. `produced` is what the app pasted;
@@ -219,10 +224,20 @@ struct StyleCorpus: Codable, Equatable, Sendable {
     static let matchedThreshold = 25    // enough samples overall
     static let registersForMatch = 2    // …spread across at least this many registers
 
-    var readiness: StyleReadiness {
-        let total = samples.count
+    /// Readiness for the language the user writes in most — what the menu bar
+    /// and Settings show when no particular passage is in play.
+    var readiness: StyleReadiness { readiness(in: dominantLanguage) }
+
+    /// Readiness for one language specifically.
+    ///
+    /// Measured per language because that's how retrieval works: 200 English
+    /// samples say nothing about how the user writes German, and reporting a
+    /// single global number would promise a voice match that can't be delivered.
+    func readiness(in language: String?) -> StyleReadiness {
+        let pool = samples(in: language)
+        let total = pool.count
         if total < StyleCorpus.learningThreshold { return .generic }
-        let covered = Set(samples.map(\.register)).count
+        let covered = Set(pool.map(\.register)).count
         let shortOnVariety = covered < StyleCorpus.registersForMatch
         if total < StyleCorpus.matchedThreshold || shortOnVariety {
             return .learning(have: total, need: StyleCorpus.matchedThreshold,
@@ -235,11 +250,37 @@ struct StyleCorpus: Codable, Equatable, Sendable {
         samples.filter { $0.register == register }.count
     }
 
+    /// Samples in one language. A `nil` language means "all of them" — the
+    /// honest behaviour when we can't tell what the passage is written in.
+    func samples(in language: String?) -> [StyleSample] {
+        guard let language else { return samples }
+        return samples.filter { $0.language == language }
+    }
+
+    /// The language the user writes in most, by sample count. Ties break on the
+    /// code so the UI doesn't flicker between equally-sized languages.
+    var dominantLanguage: String? {
+        var counts: [String: Int] = [:]
+        for sample in samples { if let language = sample.language { counts[language, default: 0] += 1 } }
+        return counts.max { ($0.value, $1.key) < ($1.value, $0.key) }?.key
+    }
+
+    /// Per-language sample counts, most first — the Settings breakdown.
+    var languageCounts: [(language: String, count: Int)] {
+        var counts: [String: Int] = [:]
+        for sample in samples { if let language = sample.language { counts[language, default: 0] += 1 } }
+        return counts.sorted { ($0.value, $1.key) > ($1.value, $0.key) }
+            .map { (language: $0.key, count: $0.value) }
+    }
+
     // MARK: - mutation
 
     /// Adds a sample if it's substantial enough and not a near-duplicate of one
     /// already held.
-    mutating func addSample(_ text: String, source: StyleSampleSource, at date: Date = Date()) {
+    /// `language` may be supplied by the caller when it already knows (dictation
+    /// has just detected it); otherwise it's detected from the text.
+    mutating func addSample(_ text: String, source: StyleSampleSource,
+                            language: String? = nil, at date: Date = Date()) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard StyleCorpus.wordCount(trimmed) >= StyleCorpus.minSampleWords else { return }
         let capped = StyleCorpus.truncate(trimmed, toWords: StyleCorpus.maxSampleWords)
@@ -255,7 +296,8 @@ struct StyleCorpus: Codable, Equatable, Sendable {
         }
         guard !plausibleDuplicate else { return }
         samples.append(StyleSample(
-            text: capped, register: .of(capped), source: source, addedAt: date))
+            text: capped, register: .of(capped), source: source, addedAt: date,
+            language: language ?? LanguageDetector.detect(capped)))
         if samples.count > StyleCorpus.maxSamples {
             samples.removeFirst(samples.count - StyleCorpus.maxSamples)
         }
@@ -279,16 +321,24 @@ struct StyleCorpus: Codable, Equatable, Sendable {
     /// useful about rewriting a long paragraph, and sending them anyway is
     /// worse than sending nothing, because they argue for the wrong rhythm.
     func samples(for passage: String, limit: Int = 3) -> [StyleSample] {
-        guard samples.count >= StyleCorpus.learningThreshold else { return [] }
+        // Language before anything else. English samples offered as "your
+        // voice" while rewriting German actively drag the result toward English
+        // rhythm and vocabulary — worse than sending no samples at all. When
+        // the passage's language can't be determined, fall back to everything
+        // rather than guessing.
+        let language = LanguageDetector.detect(passage)
+        let pool = samples(in: language)
+        guard pool.count >= StyleCorpus.learningThreshold else { return [] }
+
         let target = StyleRegister.of(passage)
         let targetWords = max(StyleCorpus.wordCount(passage), 1)
         // Prefer the passage's own register outright. Only when that register
         // is unrepresented do off-register samples get used — a mediocre
         // reference still beats none, but padding a good set with wrong-shaped
         // samples argues for the wrong rhythm.
-        let sameRegister = samples.filter { $0.register == target }
-        let pool = sameRegister.isEmpty ? samples : sameRegister
-        let scored = pool.map { sample -> (StyleSample, Double) in
+        let sameRegister = pool.filter { $0.register == target }
+        let candidates = sameRegister.isEmpty ? pool : sameRegister
+        let scored = candidates.map { sample -> (StyleSample, Double) in
             // Closer in length is closer in shape; log-ratio so a 10× gap is
             // penalized much harder than a 2× one.
             let ratio = Double(StyleCorpus.wordCount(sample.text)) / Double(targetWords)
@@ -312,6 +362,18 @@ struct StyleCorpus: Codable, Equatable, Sendable {
     }
 
     // MARK: - helpers
+
+    /// Fills in languages for samples stored before this was recorded.
+    /// Returns true when anything changed, so the caller knows to save.
+    mutating func backfillLanguages() -> Bool {
+        var changed = false
+        for index in samples.indices where samples[index].language == nil {
+            guard let detected = LanguageDetector.detect(samples[index].text) else { continue }
+            samples[index].language = detected
+            changed = true
+        }
+        return changed
+    }
 
     static func wordCount(_ text: String) -> Int {
         text.split(whereSeparator: { $0.isWhitespace }).count

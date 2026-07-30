@@ -35,7 +35,13 @@ enum StyleMiner {
     private static func punctuationProposals(
         _ corpus: StyleCorpus, _ profile: StyleProfile
     ) -> [StyleProposal] {
-        let written = corpus.samples.filter { $0.source == .written }
+        // Punctuation convention is language-specific: German uses „…" quotes,
+        // French spaces its guillemets. Mining across languages would propose
+        // an English habit as a universal rule and enforce it against text
+        // where it's simply wrong, so evidence comes from one language only —
+        // the one the user writes in most.
+        let language = corpus.dominantLanguage
+        let written = corpus.samples(in: language).filter { $0.source == .written }
         guard written.count >= minWrittenSamplesForPunctuation else { return [] }
         var found: [StyleProposal] = []
 
@@ -45,7 +51,8 @@ enum StyleMiner {
         if !usesEmDash && !alreadyHandled {
             found.append(StyleProposal(
                 kind: .substitution(find: emDash, replace: ", "),
-                evidence: "You haven't used an em dash once in \(written.count) things you've written."))
+                evidence: "You haven't used an em dash once in \(written.count) things you've written"
+                    + languageSuffix(language, corpus) + "."))
         }
 
         let curly = ["\u{201C}", "\u{201D}", "\u{2018}", "\u{2019}"]
@@ -56,7 +63,8 @@ enum StyleMiner {
         if !usesCurly && usesStraight && !profile.enforced.straightenQuotes {
             found.append(StyleProposal(
                 kind: .straightenQuotes,
-                evidence: "You always type straight quotes, never curly ones."))
+                evidence: "You always type straight quotes, never curly ones"
+                    + languageSuffix(language, corpus) + "."))
         }
 
         return found
@@ -96,6 +104,13 @@ enum StyleMiner {
                     kind: .bannedWord(word),
                     evidence: "You removed \"\(word)\" from \(count) rewrites, and never use it yourself.")
             }
+    }
+
+    /// Names the language in the evidence, but only when the corpus has more
+    /// than one — otherwise it's noise.
+    private static func languageSuffix(_ language: String?, _ corpus: StyleCorpus) -> String {
+        guard let language, corpus.languageCounts.count > 1 else { return "" }
+        return " in \(LanguageDetector.displayName(language))"
     }
 
     private static func words(_ text: String) -> [String] {

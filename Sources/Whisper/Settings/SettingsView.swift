@@ -1045,6 +1045,26 @@ private struct StyleTab: View {
                 }
             }
 
+            // Style is learned per language, so one global number would imply a
+            // voice match that doesn't exist in a language with no samples.
+            let languages = learner.corpus.languageCounts
+            if languages.count > 1 {
+                VStack(alignment: .leading, spacing: 2) {
+                    ForEach(languages, id: \.language) { entry in
+                        HStack(spacing: 6) {
+                            let state = learner.readiness(in: entry.language)
+                            Image(systemName: state.symbolName)
+                                .foregroundStyle(state == .matched ? .green : .secondary)
+                            Text("\(LanguageDetector.displayName(entry.language)): \(state.label.lowercased())")
+                                .font(.caption)
+                        }
+                    }
+                    Text("Samples are only used for passages in the same language — English samples would pull a German rewrite toward English rhythm.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
             if !learner.proposals.isEmpty { proposalList }
 
             Toggle("Learn my style as I use it", isOn: $learningEnabled)
