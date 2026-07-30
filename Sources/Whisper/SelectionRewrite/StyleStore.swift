@@ -54,15 +54,38 @@ final class StyleStore: ObservableObject {
         // Mined rules come from the whole corpus, so they belong on the base
         // where every template inherits them.
         current.base = current.base.applying(proposal, replacement: replacement)
-        guard let data = try? current.encoded() else { return false }
-        do {
-            try data.write(to: fileURL, options: .atomic)
-        } catch {
-            loadError = "Couldn't write style.json: \(error.localizedDescription)"
-            return false
-        }
+        return write(current)
+    }
+
+    /// The example templates the starter file ships, for adding to a config
+    /// that predates them.
+    ///
+    /// Needed because `createStarterIfNeeded` only writes when no file exists,
+    /// so anyone who had a `style.json` before templates shipped never saw the
+    /// examples — and a feature nobody can see is a feature nobody uses.
+    nonisolated static let exampleTemplates: [(name: String, overlay: StyleOverlay)] = [
+        ("email", StyleOverlay(
+            description: "Warmer than usual, still direct. No throat-clearing.",
+            guidance: ["Open with the ask, not the context."],
+            maxWords: 200)),
+        ("slack", StyleOverlay(
+            description: "Lowercase, quick, no sign-off.",
+            maxWords: 60))
+    ]
+
+    /// Writes the example templates into `style.json`, skipping any name the
+    /// user already has. Returns false and leaves the file alone if the config
+    /// isn't currently parseable.
+    @discardableResult
+    func addExampleTemplates() -> Bool {
         load()
-        return true
+        guard var current = config else { return false }
+        for example in StyleStore.exampleTemplates
+        where current.templates[example.name.lowercased()] == nil {
+            current.templates[example.name.lowercased()] = example.overlay
+            current.order.append(example.name)
+        }
+        return write(current)
     }
 
     /// Changes which template applies when the user doesn't name one.
@@ -71,7 +94,13 @@ final class StyleStore: ObservableObject {
         load()
         guard var current = config else { return false }
         current.defaultTemplate = name
-        guard let data = try? current.encoded() else { return false }
+        return write(current)
+    }
+
+    /// Serializes a config back to disk and re-reads it, so `config` and the
+    /// file can never disagree about what the rules are.
+    private func write(_ updated: StyleConfig) -> Bool {
+        guard let data = try? updated.encoded() else { return false }
         do {
             try data.write(to: fileURL, options: .atomic)
         } catch {

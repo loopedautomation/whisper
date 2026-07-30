@@ -334,6 +334,13 @@ final class Coordinator: ObservableObject {
     func beginRecording(silent: Bool = false) {
         guard !state.isRecording, !selectionRewriteActive else { return }
         guard ensureNotBusy() else { return }
+        // With the smart hotkey on, this same key rewrites whatever is selected
+        // and only dictates when nothing is. Decided here, before any recording
+        // starts, so the two pipelines can never both be live.
+        if UserDefaults.standard.bool(forKey: PrefKey.smartRewriteHotkey),
+           routeToSelectionRewrite() {
+            return
+        }
         // Capture the dictation target before anything else — a permission
         // prompt below, or our own menu/HUD, could otherwise become
         // momentarily frontmost and get captured instead.
@@ -405,7 +412,10 @@ final class Coordinator: ObservableObject {
     /// Both happen at once. The copy needs up to a second of round-tripping
     /// through the other app's pasteboard, and making the user wait for it
     /// would clip the first word of whatever they say.
-    func beginSelectionRewrite() {
+    /// `preread` is a selection already obtained from Accessibility. When it's
+    /// present the ⌘C round-trip is skipped entirely, which means the user's
+    /// clipboard survives the rewrite untouched.
+    func beginSelectionRewrite(preread: String? = nil) {
         guard !state.isRecording, !selectionRewriteActive else { return }
         captureTargetApp()
 
@@ -447,12 +457,39 @@ final class Coordinator: ObservableObject {
             detectedLanguage = nil
             incrementalActive = false          // never type live into a rewrite
             let app = targetApp
-            selectionTask = Task { try await SelectionService.capture(targetApp: app) }
+            if let preread {
+                selectionTask = Task { preread }
+            } else {
+                selectionTask = Task { try await SelectionService.capture(targetApp: app) }
+            }
             // Loading the on-device model takes a moment; do it now, under
             // cover of the recording, rather than after the user stops talking.
             OnDeviceModelClient.prewarm()
         } catch {
             state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
+        }
+    }
+
+    /// True when this keypress should start a selection rewrite instead of a
+    /// dictation, because the user has text selected.
+    ///
+    /// Reads the selection through Accessibility, which is both instant and
+    /// non-destructive — when it succeeds, the rewrite never touches the
+    /// clipboard at all. Only an app that refuses to report its selection falls
+    /// back to the ⌘C probe, and only if the user chose that.
+    private func routeToSelectionRewrite() -> Bool {
+        let fallback = SmartHotkeyFallback(
+            rawValue: UserDefaults.standard.string(forKey: PrefKey.smartRewriteFallback) ?? "")
+            ?? .dictate
+        switch SelectionProbe.decide(SelectionProbe.probe(), whenUnknown: fallback) {
+        case .dictate:
+            return false
+        case .rewrite(let text):
+            beginSelectionRewrite(preread: text)
+            return true
+        case .rewriteIfCopyFindsText:
+            beginSelectionRewrite()
+            return true
         }
     }
 

@@ -24,6 +24,8 @@ enum PrefKey {
     static let selectionRewriteModel = "selectionRewriteModel"
     static let selectionRewriteProvider = "selectionRewriteProvider"   // "anthropic" | "openaiCompatible"
     static let selectionRewriteBaseURL = "selectionRewriteBaseURL"     // for openaiCompatible (e.g. a local model)
+    static let smartRewriteHotkey = "smartRewriteHotkey"             // one key: rewrite a selection, else dictate
+    static let smartRewriteFallback = "smartRewriteFallback"         // what to do when an app won't report its selection
     static let styleLearningEnabled = "styleLearningEnabled"           // harvest your writing to match your voice over time
     static let dismissedStyleProposals = "dismissedStyleProposals"     // mined rules the user has declined
     static let soundsEnabled = "soundsEnabled"            // master sound toggle
@@ -233,6 +235,8 @@ enum DefaultPref {
             PrefKey.selectionRewriteProvider: RewriteProvider.anthropic.rawValue,
             PrefKey.selectionRewriteModel: "claude-opus-4-8",
             PrefKey.selectionRewriteBaseURL: "http://localhost:11434/v1",   // Ollama's default
+            PrefKey.smartRewriteHotkey: false,   // opt-in: it changes what the dictation key does
+            PrefKey.smartRewriteFallback: SmartHotkeyFallback.dictate.rawValue,
             PrefKey.styleLearningEnabled: true,
 
             PrefKey.language: "en",

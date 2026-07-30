@@ -66,6 +66,43 @@ enum FocusInspector {
         return .unknown
     }
 
+    /// The text currently selected in the frontmost app, read straight from the
+    /// Accessibility API — or `nil` when that can't be determined.
+    ///
+    /// `nil` is not "nothing is selected": it means *unknown*, which is the
+    /// answer for any app whose AX tree doesn't expose selection (Electron
+    /// being the usual culprit). Callers must treat the two differently,
+    /// because acting on "unknown" as though it were "empty" is how a rewrite
+    /// turns into a dictation over the user's paragraph.
+    ///
+    /// Non-destructive, unlike the ⌘C probe: nothing touches the pasteboard.
+    static func selectedText() -> String? {
+        guard let frontmost = NSWorkspace.shared.frontmostApplication else { return nil }
+        let app = AXUIElementCreateApplication(frontmost.processIdentifier)
+        // Same wake-up as focusStatus: Chromium keeps its tree disabled until
+        // an assistive client asks.
+        AXUIElementSetAttributeValue(app, "AXManualAccessibility" as CFString, kCFBooleanTrue)
+
+        var element: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(
+            app, kAXFocusedUIElementAttribute as CFString, &element) == .success,
+              let element else {
+            log.info("selectedText: no focused element")
+            return nil
+        }
+
+        var selection: CFTypeRef?
+        let err = AXUIElementCopyAttributeValue(
+            element as! AXUIElement, kAXSelectedTextAttribute as CFString, &selection)
+        guard err == .success, let text = selection as? String else {
+            // `.noValue` here means the element has no selected-text attribute
+            // at all — still unknown, not empty.
+            log.info("selectedText: attribute unavailable (err=\(err.rawValue, privacy: .public))")
+            return nil
+        }
+        return text
+    }
+
     private static func isEditable(_ element: AXUIElement) -> Bool {
         var roleValue: CFTypeRef?
         if AXUIElementCopyAttributeValue(element, kAXRoleAttribute as CFString, &roleValue) == .success,
