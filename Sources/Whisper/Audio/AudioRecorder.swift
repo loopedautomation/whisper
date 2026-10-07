@@ -5,7 +5,7 @@ import CoreAudio
 /// Captures microphone audio and resamples it to the 16 kHz mono Float32 format
 /// Whisper expects. Used for batch mode (the full buffer is returned on `stop`).
 final class AudioRecorder {
-    private let engine = AVAudioEngine()
+    private var engine = AVAudioEngine()
     private var converter: AVAudioConverter?
     private let targetFormat: AVAudioFormat
     private var samples: [Float] = []
@@ -39,6 +39,10 @@ final class AudioRecorder {
         guard !isRunning else { return }
         lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
 
+        // Recreate the engine for every recording: reusing one AVAudioEngine for
+        // successive input sessions can stop delivering buffers after the first,
+        // which made every dictation after the first record silence.
+        engine = AVAudioEngine()
         let input = engine.inputNode
         // Route capture to the user-selected input device. When the persisted UID is
         // empty (or the device is gone) we leave the input node on the OS default,
