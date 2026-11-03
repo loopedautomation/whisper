@@ -1128,6 +1128,7 @@ private struct PermissionsTab: View {
 private struct AboutTab: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var updates: UpdateChecker
+    @AppStorage(PrefKey.telemetryEnabled) private var telemetryEnabled = false
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
@@ -1196,6 +1197,22 @@ private struct AboutTab: View {
                 .font(.callout).multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
                 .padding(.horizontal)
+
+            if Telemetry.isAvailable {
+                VStack(spacing: 4) {
+                    Toggle("Share anonymous usage data", isOn: Binding(
+                        get: { telemetryEnabled },
+                        set: { on in
+                            Telemetry.setEnabled(on)
+                            telemetryEnabled = on
+                        }))
+                    Text("Sends app launches, whether recordings and model loads worked, crash types, and your app version, macOS version and model to PostHog. Never your audio, transcripts, selected text, vocabulary or which apps you use.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .multilineTextAlignment(.center)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.horizontal)
+            }
             Link(destination: URL(string: "https://looped.sh")!) {
                 Label("Learn more at looped.sh", systemImage: "arrow.up.right.square")
             }

@@ -14,7 +14,7 @@ runs **local open-source Whisper models** (bring your own model) — no cloud
 transcription. It lives in the menu bar, is driven by global hotkeys, and the
 transcribed text is copied to the clipboard and pasted at your cursor.
 
-**Contents:** [Features](#features) · [Install](#install) · [Build & run](#build--run) · [AI model](#ai-model) · [Rewrite my selection](#rewrite-my-selection) · [Tests](#tests) · [License](#license)
+**Contents:** [Features](#features) · [Install](#install) · [Build & run](#build--run) · [AI model](#ai-model) · [Rewrite my selection](#rewrite-my-selection) · [Privacy](#privacy) · [Tests](#tests) · [License](#license)
 
 > Apple Silicon, macOS 14+. Transcription is powered by
 > [WhisperKit](https://github.com/argmaxinc/WhisperKit) (CoreML).
@@ -297,6 +297,36 @@ machine:
 
 No API key is needed for a local server — the header simply isn't sent when the
 key is empty.
+
+## Privacy
+
+Your audio is transcribed on your Mac and never leaves it. Text only goes to an
+AI provider for features that need one (selection rewrite, language repair, AI
+quick actions), and only to the provider you configured.
+
+**Anonymous usage data is opt-in.** After you install, the app asks once whether
+to share it; nothing is sent unless you say yes, and you can change your answer
+in **Settings → About**. If you opt in, these events go to
+[PostHog](https://posthog.com):
+
+| Event | Properties |
+| --- | --- |
+| `app_launched` | model, mode |
+| `model_loaded` / `model_load_failed` | model, seconds or failure stage and error type |
+| `recording_start_failed` | error type |
+| `recording_finished` | outcome (delivered, empty, failed, …), mode, model, length in seconds, peak loudness |
+| `crash_detected` | crash type and name, the app function it happened in |
+
+Every event also carries the app and macOS version and a random id made only
+for this, which is thrown away if you opt out. No person profile is created.
+Your audio, transcripts, selected text, vocabulary and which apps you use are
+never sent. The full list lives in
+[`Telemetry.swift`](Sources/Whisper/System/Telemetry.swift). Builds without a
+PostHog key (forks, `make build` without `POSTHOG_API_KEY`) contain no telemetry
+and never ask.
+
+Crash logs are saved locally; the app shows them to you on the next launch and
+you decide whether to share the full log.
 
 ## Tests
 
