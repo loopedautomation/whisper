@@ -29,6 +29,10 @@ enum PrefKey {
     static let quickActionsEnabled = "quickActionsEnabled"        // opt-in voice quick actions
     static let quickActionsLLMFallback = "quickActionsLLMFallback" // opt-in: AI intent detection when no trigger matches (sends transcript to your AI provider)
     static let quickActionsModifier = "quickActionsModifier"      // modifier held at recording start to arm quick actions; "none" = always armed
+    static let telemetryEnabled = "telemetryEnabled"              // opt-in anonymous usage events (see Telemetry); off until the user says yes
+    static let telemetryPrompted = "telemetryPrompted"            // the user has answered the telemetry prompt
+    static let telemetryDistinctID = "telemetryDistinctID"        // random id, only for telemetry; dropped when it's turned off
+    static let telemetryReportedCrashes = "telemetryReportedCrashes" // crash log file names already reported
 }
 
 /// Modifier key that must be held when recording starts for quick actions to
@@ -263,7 +267,8 @@ enum DefaultPref {
             PrefKey.inputDeviceUID: "",   // follow system default
             PrefKey.quickActionsEnabled: false,
             PrefKey.quickActionsLLMFallback: false,
-            PrefKey.quickActionsModifier: QuickActionModifier.command.rawValue
+            PrefKey.quickActionsModifier: QuickActionModifier.command.rawValue,
+            PrefKey.telemetryEnabled: false
         ])
     }
 }

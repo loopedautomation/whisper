@@ -61,6 +61,9 @@ jobs:
       - name: Build & sign app
         env:
           WHISPER_SIGN_ID: ${{ env.SIGN_ID }}
+          # Opt-in telemetry (see Sources/Whisper/System/Telemetry.swift).
+          POSTHOG_API_KEY: ${{ vars.POSTHOG_API_KEY }}
+          POSTHOG_HOST: ${{ vars.POSTHOG_HOST }}
         run: make build
 
       - name: Notarize & staple

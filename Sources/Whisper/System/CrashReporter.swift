@@ -8,9 +8,11 @@ import AppKit
 /// (exception/signal name, reason, call-stack symbols, app version, macOS version,
 /// timestamp) and writes it to a `CrashLogs` directory under Application Support.
 ///
-/// **Nothing is ever sent anywhere automatically.** On the next launch, the app
-/// detects any saved logs and surfaces them to the user, who is fully in control
-/// of whether to view, copy, delete, or file a GitHub issue with the contents.
+/// **The log itself is never sent anywhere automatically.** On the next launch,
+/// the app detects any saved logs and surfaces them to the user, who is fully in
+/// control of whether to view, copy, delete, or file a GitHub issue with the
+/// contents. If the user opted in to `Telemetry`, only the crash type and the
+/// app function it happened in are reported.
 ///
 /// macOS itself also records richer crash reports under
 /// `~/Library/Logs/DiagnosticReports`; ``CrashReporter`` points users there too.
@@ -136,6 +138,41 @@ enum CrashReporter {
     }
 
     static func hasPendingLogs() -> Bool { !pendingLogs().isEmpty }
+
+    struct Summary: Equatable {
+        let kind: String
+        let name: String
+        /// Topmost frame in our own code (a mangled Swift symbol), if any.
+        let appFrame: String?
+    }
+
+    static func summary(of url: URL) -> Summary? {
+        guard let log = try? String(contentsOf: url, encoding: .utf8) else { return nil }
+        return summary(fromLog: log)
+    }
+
+    /// The crash type and where in our code it happened, read from a log
+    /// written by `makeLog`. Leaves out the reason, which can quote data.
+    static func summary(fromLog log: String) -> Summary? {
+        func field(_ label: String) -> String? {
+            log.split(separator: "\n")
+                .first { $0.hasPrefix(label + ":") }
+                .map { $0.dropFirst(label.count + 1).trimmingCharacters(in: .whitespaces) }
+        }
+        guard let kind = field("Type"), let name = field("Name") else { return nil }
+        // Frames look like "5   LoopedWhisper   0x…   $s13LoopedWhisper…   460".
+        // Skip our own signal handler, which tops every signal crash's stack.
+        var appFrame: String?
+        for line in log.split(separator: "\n") {
+            let parts = line.split(separator: " ")
+            guard parts.count >= 4, parts[1] == "LoopedWhisper" else { continue }
+            let symbol = String(parts[3])
+            if symbol.contains("CrashReporter") { continue }
+            appFrame = symbol
+            break
+        }
+        return Summary(kind: kind, name: name, appFrame: appFrame)
+    }
 
     static func clearLogs() {
         for url in pendingLogs() {

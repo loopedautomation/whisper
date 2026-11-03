@@ -66,6 +66,20 @@ if [[ -f "$ROOT/package.json" ]]; then
     echo "▶ Version $VERSION (from package.json)"
 fi
 
+# 4a. Analytics. The app asks before sending anything; without POSTHOG_API_KEY
+#     it has no telemetry at all and never asks. A PostHog project key is
+#     write-only and meant to ship in clients, so it isn't a secret.
+if [[ -n "${POSTHOG_API_KEY:-}" ]]; then
+    PLIST="$APP/Contents/Info.plist"
+    /usr/libexec/PlistBuddy -c "Delete :PostHogAPIKey" "$PLIST" 2>/dev/null || true
+    /usr/libexec/PlistBuddy -c "Add :PostHogAPIKey string $POSTHOG_API_KEY" "$PLIST"
+    if [[ -n "${POSTHOG_HOST:-}" ]]; then
+        /usr/libexec/PlistBuddy -c "Delete :PostHogHost" "$PLIST" 2>/dev/null || true
+        /usr/libexec/PlistBuddy -c "Add :PostHogHost string $POSTHOG_HOST" "$PLIST"
+    fi
+    echo "▶ Opt-in telemetry enabled (${POSTHOG_HOST:-https://us.i.posthog.com})"
+fi
+
 # 4b. Dev flavor: distinguish the name everywhere (Info.plist + localized strings).
 if [[ "${WHISPER_DEV:-0}" == "1" ]]; then
     /usr/libexec/PlistBuddy -c "Set :CFBundleName $DISPLAY_NAME" "$APP/Contents/Info.plist"

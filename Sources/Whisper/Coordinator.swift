@@ -97,6 +97,43 @@ final class Coordinator: ObservableObject {
         preloadModelInBackground()
         checkForUpdatesInBackground()
         state.hasPendingCrashLogs = CrashReporter.hasPendingLogs()
+        Telemetry.capture(.appLaunched, [
+            "model": UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base",
+            "mode": currentMode().rawValue
+        ])
+        Telemetry.reportNewCrashes()
+        // After launch settles, so the alert isn't raised mid-startup.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
+            self?.presentTelemetryPromptIfNeeded()
+        }
+    }
+
+    // MARK: - telemetry
+
+    /// Asks once, after install (or after updating from a version without
+    /// telemetry), whether to share anonymous usage data. Nothing is sent
+    /// unless the user picks "Share".
+    func presentTelemetryPromptIfNeeded() {
+        guard Telemetry.shouldPrompt() else { return }
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "Help make Looped Whisper more reliable?"
+        alert.informativeText = """
+        If you agree, Looped Whisper sends anonymous usage events to PostHog, \
+        our analytics provider: app launches, whether recordings and model loads \
+        worked, the type of any crash, and your app version, macOS version and \
+        selected model.
+
+        It never sends your audio, your transcripts, your selected text, your \
+        vocabulary or which apps you use. Transcription stays on your Mac either way.
+
+        You can change this anytime in Settings → About.
+        """
+        alert.addButton(withTitle: "Share Anonymous Usage Data")
+        let decline = alert.addButton(withTitle: "Don't Share")
+        decline.keyEquivalent = "\u{1b}"   // Esc declines
+        Telemetry.setEnabled(alert.runModal() == .alertFirstButtonReturn)
+        if Telemetry.isEnabled() { Telemetry.reportNewCrashes() }
     }
 
     /// Tracks the last app that wasn't us, for the menu path only — opening our
@@ -180,8 +217,8 @@ final class Coordinator: ObservableObject {
             ? "Looped Whisper crashed on a previous run"
             : "Looped Whisper crashed \(count) times on previous runs"
         alert.informativeText = """
-        A local crash log was saved on your machine. Nothing has been sent anywhere — \
-        you decide whether to share it. You can view the log, copy it, or open a \
+        A local crash log was saved on your machine. The log hasn't been sent \
+        anywhere — you decide whether to share it. You can view the log, copy it, or open a \
         prefilled GitHub issue to help us fix it.
 
         macOS also keeps more detailed reports in ~/Library/Logs/DiagnosticReports.
@@ -247,12 +284,14 @@ final class Coordinator: ObservableObject {
 
     func loadModel(_ model: String) async {
         let label = WhisperModel.label(for: model)
+        let started = Date()
         state.setStatus(.loadingModel(label))
         state.clearError()
         // Download with visible progress (in the Model tab) if not already present.
         if !models.isDownloaded(model) {
             let ok = await models.download(model)
             if !ok && !models.isDownloaded(model) {
+                Telemetry.capture(.modelLoadFailed, ["model": model, "stage": "download"])
                 state.setError(AppError(
                     "Couldn't download the \(label) model",
                     hint: "check your internet connection and try again"))
@@ -261,8 +300,12 @@ final class Coordinator: ObservableObject {
         }
         do {
             try await transcription.loadModel(model) { _ in }
+            Telemetry.capture(.modelLoaded, [
+                "model": model, "seconds": Int(Date().timeIntervalSince(started))])
             if !state.isRecording { state.setStatus(.idle) }
         } catch {
+            Telemetry.capture(.modelLoadFailed, [
+                "model": model, "stage": "load", "error_type": String(describing: type(of: error))])
             state.setError(AppError(
                 "Couldn't load the \(label) transcription model",
                 hint: "try re-downloading it in Settings → Model"))
@@ -411,6 +454,7 @@ final class Coordinator: ObservableObject {
                 startRealtimePolling()
             }
         } catch {
+            Telemetry.capture(.recordingStartFailed, ["error_type": String(describing: type(of: error))])
             state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
         }
     }
@@ -864,6 +908,7 @@ final class Coordinator: ObservableObject {
                     TextInserter.typeString(remainder, targetApp: targetApp)
                 }
                 state.lastTranscript = raw
+                reportRecording("delivered", samples: samples)
                 // Same reason as the batch path below: this text is now in the
                 // document, and selecting it later must not be mistaken for
                 // hand-typed prose — its punctuation is the transcriber's.
@@ -882,9 +927,11 @@ final class Coordinator: ObservableObject {
                     state.lastTranscript = raw
                     switch QuickActionExecutor.execute(match.action, query: match.query) {
                     case .success:
+                        reportRecording("quick_action", samples: samples)
                         SoundService.play(.done)
                         state.setStatus(.idle)
                     case .failure(let err):
+                        reportRecording("quick_action_failed", samples: samples)
                         state.setError(AppError(err.message, hint: err.hint))
                     }
                     hud.hide()
@@ -894,6 +941,7 @@ final class Coordinator: ObservableObject {
                 // Modifier held = explicit action mode. A miss must not paste —
                 // the user signalled a command, not dictation.
                 if quickActionsForced {
+                    reportRecording("no_action_matched", samples: samples)
                     state.lastTranscript = raw
                     ClipboardService.set(raw)
                     state.setError(AppError(
@@ -928,24 +976,42 @@ final class Coordinator: ObservableObject {
             // model's prose — and its punctuation — into the corpus.
             learner.noteProduced(finalText)
             deliver(finalText)
+            reportRecording("delivered", samples: samples)
             SoundService.play(.done)
             if case .error = state.status {} else { state.setStatus(.idle) }
         } catch let error as TranscriptionService.TranscriptionError {
             switch error {
             case .empty:
+                reportRecording("empty", samples: samples)
                 // Benign: nothing was said. Keep this a soft warning, not an error.
                 state.setStatus(.idle)
                 state.lastWarning = "No speech detected."
             case .modelNotLoaded:
+                reportRecording("model_not_ready", samples: samples)
                 state.setError(AppError(
                     "Transcription model isn't ready",
                     hint: "wait for it to finish loading, or pick one in Settings → Model"))
             }
         } catch {
+            reportRecording("failed", samples: samples)
             state.setError(AppError("Transcription failed", hint: error.localizedDescription))
         }
         hud.hide()
         state.clearLive()
+    }
+
+    /// How a dictation ended, with the recording's length and loudest sample —
+    /// enough to tell silent captures from real failures, without any content.
+    private func reportRecording(_ outcome: String, samples: [Float]) {
+        guard Telemetry.isEnabled() else { return }
+        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
+        Telemetry.capture(.recordingFinished, [
+            "outcome": outcome,
+            "mode": currentMode().rawValue,
+            "model": UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base",
+            "audio_seconds": (Double(samples.count) / AudioRecorder.targetSampleRate * 10).rounded() / 10,
+            "audio_peak": (Double(peak) * 1000).rounded() / 1000
+        ])
     }
 
     private func deliver(_ text: String) {
