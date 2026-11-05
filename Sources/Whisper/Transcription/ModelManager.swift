@@ -27,6 +27,7 @@ struct WhisperModel: Identifiable, Hashable {
         .init(id: "medium", label: "Medium", note: "~1.5 GB · accurate, slower"),
         .init(id: "large-v3", label: "Large v3", note: "~3 GB · most accurate"),
         .init(id: "large-v3-v20240930", label: "Large v3 (turbo)", note: "~1.5 GB · fast + accurate"),
+        .init(id: "large-v3-v20240930_626MB", label: "Large v3 (turbo, compact)", note: "~630 MB · the turbo model, compressed to a smaller download"),
         .init(id: ModelStorage.parakeetRepo, label: "Parakeet v3",
               note: "~600 MB · 25 European languages, fast · auto-detects language",
               engine: .parakeet)

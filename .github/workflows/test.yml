@@ -27,4 +27,11 @@ jobs:
           key: spm-${{ runner.os }}-${{ hashFiles('Package.resolved') }}
           restore-keys: spm-${{ runner.os }}-
 
+      # Fails when Package.resolved doesn't match what Package.swift resolves
+      # to, and prints the difference, so a stale lockfile can't slip through.
+      - name: Check Package.resolved is up to date
+        run: |
+          swift package resolve
+          git diff --exit-code Package.resolved
+
       - run: swift test
