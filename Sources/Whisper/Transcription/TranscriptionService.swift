@@ -31,6 +31,11 @@ actor TranscriptionService {
             onProgress?(model)
             let config = WhisperKitConfig(model: model, downloadBase: ModelStorage.baseURL)
             let kit = try await WhisperKit(config)
+            // The first inference compiles the model for this machine and is
+            // several times slower than the rest. Spend it now, on silence,
+            // so the first real dictation is full speed.
+            _ = try? await kit.transcribe(
+                audioArray: [Float](repeating: 0, count: Int(AudioRecorder.targetSampleRate * 1.5)))
             pipe = kit
             parakeet = nil
         case .parakeet:
@@ -58,8 +63,8 @@ actor TranscriptionService {
         // own internal language handling — the selection policy and vocabulary
         // biasing are Whisper-specific and don't apply.
         if let parakeet {
-            let text = try parakeet.transcribeAudio(samples, sampleRate: Int(AudioRecorder.targetSampleRate))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            let text = TranscriptCleaner.stripTrailingCredits(
+                try parakeet.transcribeAudio(samples, sampleRate: Int(AudioRecorder.targetSampleRate)))
             guard !text.isEmpty else { throw TranscriptionError.empty }
             return text
         }
@@ -111,13 +116,16 @@ actor TranscriptionService {
             options.language = language
             options.usePrefillPrompt = true
         }
-        let prompt = vocabulary.joined(separator: ", ")
+        let prompt = VocabularyPrompt.build(vocabulary)
         if !prompt.isEmpty {
             options.promptTokens = pipe.tokenizer?.encode(text: " " + prompt)
             options.usePrefillPrompt = true
         }
         let results = try await pipe.transcribe(audioArray: samples, decodeOptions: options)
-        return results.map(\.text).joined(separator: " ").trimmingCharacters(in: .whitespacesAndNewlines)
+        let text = TranscriptCleaner.stripTrailingCredits(results.map(\.text).joined(separator: " "))
+        // On audio with no words in it the model can read its prompt back.
+        // That is the vocabulary list, not something the user said.
+        return TranscriptCleaner.isPromptEcho(text, vocabulary: vocabulary) ? "" : text
     }
 
     /// Detects the spoken language and returns the best-scoring candidate

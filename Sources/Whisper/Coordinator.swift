@@ -4,7 +4,7 @@ import AVFoundation
 import AppKit
 
 /// Orchestrates the full capture pipeline:
-/// record → (realtime live caption) → transcribe → (language repair) → clipboard/paste.
+/// record → transcribe → (language repair) → clipboard/paste.
 @MainActor
 final class Coordinator: ObservableObject {
     let state: AppState
@@ -17,25 +17,16 @@ final class Coordinator: ObservableObject {
     let models: ModelManager
     let audioDevices: AudioDeviceManager
     let updateChecker: UpdateChecker
+    let history: DictationHistory
+    let corrections: CorrectionStore
 
     private let recorder = AudioRecorder()
     private let transcription = TranscriptionService()
     private var hotkeys: HotkeyManager?
     private let fnMonitor = FnKeyMonitor()
 
-    private var realtimeTimer: Timer?
-    private var realtimeTask: Task<Void, Never>?
-    private let hud: HUDPanelController
     private var escMonitorGlobal: Any?
     private var escMonitorLocal: Any?
-    // Incremental (live) insertion state for realtime mode.
-    private var incrementalActive = false
-    private var liveInsertedText = ""
-    private var lastPollText = ""
-    // Language detected once per recording when several languages are selected
-    // (restricted mode); pinned for the rest of the session.
-    private var detectedLanguage: String?
-    private var languageRechecked = false
     // The app the user was dictating into, captured the moment recording
     // starts. Re-activated right before every paste/type — transcription
     // (and optional language detection / AI rewrite) can take long enough
@@ -62,6 +53,17 @@ final class Coordinator: ObservableObject {
     private var selectionTask: Task<String, Error>?
     private var selectionRewriteActive = false
     private var frontmostObserver: NSObjectProtocol?
+    // When the current recording began, to tell a deliberate hold from a key
+    // that was only brushed.
+    private var recordingStartedAt: Date?
+    // The key is up and the recorder is running out its tail. Nothing else may
+    // end or restart the recording until that finishes.
+    private var stopping = false
+    // Held while recording so the Mac doesn't idle to sleep mid-dictation.
+    private var sleepGuard: NSObjectProtocol?
+
+    /// A hold shorter than this was a slip, not a dictation.
+    nonisolated static let minimumHold: TimeInterval = 0.3
 
     init() {
         // Install crash handlers as early as possible so we catch failures during
@@ -78,7 +80,8 @@ final class Coordinator: ObservableObject {
         models = ModelManager()
         audioDevices = AudioDeviceManager()
         updateChecker = UpdateChecker()
-        hud = HUDPanelController(state: state)
+        history = DictationHistory()
+        corrections = CorrectionStore()
         bootstrap()
     }
 
@@ -86,6 +89,7 @@ final class Coordinator: ObservableObject {
         // Before registerDefaults: the migration detects "never configured" by
         // an absent value, which registering defaults would paper over.
         DefaultPref.migrateLegacyAIConfig()
+        DefaultPref.migrateRetiredSettings()
         DefaultPref.registerDefaults()
         permissions.refresh()
         loginItem.refresh()
@@ -97,43 +101,6 @@ final class Coordinator: ObservableObject {
         preloadModelInBackground()
         checkForUpdatesInBackground()
         state.hasPendingCrashLogs = CrashReporter.hasPendingLogs()
-        Telemetry.capture(.appLaunched, [
-            "model": UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base",
-            "mode": currentMode().rawValue
-        ])
-        Telemetry.reportNewCrashes()
-        // After launch settles, so the alert isn't raised mid-startup.
-        DispatchQueue.main.asyncAfter(deadline: .now() + 1) { [weak self] in
-            self?.presentTelemetryPromptIfNeeded()
-        }
-    }
-
-    // MARK: - telemetry
-
-    /// Asks once, after install (or after updating from a version without
-    /// telemetry), whether to share anonymous usage data. Nothing is sent
-    /// unless the user picks "Share".
-    func presentTelemetryPromptIfNeeded() {
-        guard Telemetry.shouldPrompt() else { return }
-        NSApp.activate(ignoringOtherApps: true)
-        let alert = NSAlert()
-        alert.messageText = "Help make Looped Whisper more reliable?"
-        alert.informativeText = """
-        If you agree, Looped Whisper sends anonymous usage events to PostHog, \
-        our analytics provider: app launches, whether recordings and model loads \
-        worked, the type of any crash, and your app version, macOS version and \
-        selected model.
-
-        It never sends your audio, your transcripts, your selected text, your \
-        vocabulary or which apps you use. Transcription stays on your Mac either way.
-
-        You can change this anytime in Settings → About.
-        """
-        alert.addButton(withTitle: "Share Anonymous Usage Data")
-        let decline = alert.addButton(withTitle: "Don't Share")
-        decline.keyEquivalent = "\u{1b}"   // Esc declines
-        Telemetry.setEnabled(alert.runModal() == .alertFirstButtonReturn)
-        if Telemetry.isEnabled() { Telemetry.reportNewCrashes() }
     }
 
     /// Tracks the last app that wasn't us, for the menu path only — opening our
@@ -264,10 +231,14 @@ final class Coordinator: ObservableObject {
         case .holdPTT:
             fnMonitor.onDown = { [weak self] in self?.beginRecording() }
             fnMonitor.onUp = { [weak self] in self?.endHeldRecording() }
+            // fn+arrow, fn+delete: the hold was the start of a key
+            // combination, so drop the recording it began.
+            fnMonitor.onInterrupted = { [weak self] in self?.cancelRecording() }
             fnMonitor.onDoubleTap = nil
         case .doubleTapToggle:
             fnMonitor.onDown = nil
             fnMonitor.onUp = nil
+            fnMonitor.onInterrupted = nil
             fnMonitor.onDoubleTap = { [weak self] in self?.toggleRecording() }
         }
         fnMonitor.start()
@@ -284,14 +255,12 @@ final class Coordinator: ObservableObject {
 
     func loadModel(_ model: String) async {
         let label = WhisperModel.label(for: model)
-        let started = Date()
         state.setStatus(.loadingModel(label))
         state.clearError()
         // Download with visible progress (in the Model tab) if not already present.
         if !models.isDownloaded(model) {
             let ok = await models.download(model)
             if !ok && !models.isDownloaded(model) {
-                Telemetry.capture(.modelLoadFailed, ["model": model, "stage": "download"])
                 state.setError(AppError(
                     "Couldn't download the \(label) model",
                     hint: "check your internet connection and try again"))
@@ -300,12 +269,8 @@ final class Coordinator: ObservableObject {
         }
         do {
             try await transcription.loadModel(model) { _ in }
-            Telemetry.capture(.modelLoaded, [
-                "model": model, "seconds": Int(Date().timeIntervalSince(started))])
             if !state.isRecording { state.setStatus(.idle) }
         } catch {
-            Telemetry.capture(.modelLoadFailed, [
-                "model": model, "stage": "load", "error_type": String(describing: type(of: error))])
             state.setError(AppError(
                 "Couldn't load the \(label) transcription model",
                 hint: "try re-downloading it in Settings → Model"))
@@ -339,7 +304,15 @@ final class Coordinator: ObservableObject {
 
     /// Ends whichever recording is actually running. Every hold-key release and
     /// the toggle both go through here, so none of them can pick the wrong one.
-    func endHeldRecording(silent: Bool = false) {
+    func endHeldRecording(silent: Bool = false, toggled: Bool = false) {
+        // A key released almost as soon as it went down was pressed by
+        // accident. Drop the recording without a sound or a paste. A toggle is
+        // two deliberate presses, so it is never judged this way.
+        if !toggled, Coordinator.heldTooBriefly(since: recordingStartedAt) {
+            DevLog.write("end: held too briefly, dropped")
+            dropBriefHold()
+            return
+        }
         switch Coordinator.pipelineToEnd(isRecording: state.isRecording,
                                         selectionRewriteActive: selectionRewriteActive) {
         case .selectionRewrite: endSelectionRewrite()
@@ -350,7 +323,37 @@ final class Coordinator: ObservableObject {
 
     func toggleRecording() {
         SoundService.play(.toggle)
-        if state.isRecording { endHeldRecording(silent: true) } else { beginRecording(silent: true) }
+        if state.isRecording { endHeldRecording(silent: true, toggled: true) } else { beginRecording(silent: true) }
+    }
+
+    /// A key let go almost at once. Nothing is transcribed, but say why: a
+    /// start tone followed by silence looks like the app ignored the press.
+    private func dropBriefHold() {
+        cancelRecording()
+        state.lastWarning = "Hold the key while you speak, then let go."
+    }
+
+    nonisolated static func heldTooBriefly(since start: Date?, now: Date = Date()) -> Bool {
+        guard let start else { return false }
+        return now.timeIntervalSince(start) < minimumHold
+    }
+
+    /// Bookkeeping for the moment the microphone opens.
+    private func recordingDidStart() {
+        recordingStartedAt = Date()
+        stopping = false
+        if sleepGuard == nil {
+            sleepGuard = ProcessInfo.processInfo.beginActivity(
+                options: .idleSystemSleepDisabled, reason: "Recording a dictation")
+        }
+    }
+
+    /// And for the moment it closes, however that came about.
+    private func recordingDidStop() {
+        recordingStartedAt = nil
+        stopping = false
+        if let sleepGuard { ProcessInfo.processInfo.endActivity(sleepGuard) }
+        sleepGuard = nil
     }
 
     /// Records the app the user is working in, so keystrokes land there later
@@ -413,7 +416,7 @@ final class Coordinator: ObservableObject {
 
     func beginRecording(silent: Bool = false) {
         guard !state.isRecording, !selectionRewriteActive else { return }
-        guard ensureNotBusy() else { return }
+        guard ensureNotBusy() else { DevLog.write("begin: refused, busy (\(state.status.menuLabel))"); return }
         // With the smart hotkey on, this same key rewrites whatever is selected
         // and only dictates when nothing is. Decided here, before any recording
         // starts, so the two pipelines can never both be live.
@@ -422,67 +425,63 @@ final class Coordinator: ObservableObject {
             return
         }
         // Capture the dictation target before anything else — a permission
-        // prompt below, or our own menu/HUD, could otherwise become
+        // prompt below, or our own menu, could otherwise become
         // momentarily frontmost and get captured instead.
         captureTargetApp()
         guard ensureMicrophoneAccess() else { return }
         do {
             try recorder.start()
-            state.clearLive()
+            recordingDidStart()
+            DevLog.write("begin: recording")
             state.lastWarning = nil
             state.clearError()
             state.setStatus(.recording)
             if !silent { SoundService.play(.start) }
             startEscMonitor()
-            // Decide live-insertion up front so toggling the setting mid-session
-            // can't corrupt what we type. Needs Accessibility (typing keystrokes).
             permissions.refresh()
-            liveInsertedText = ""
-            lastPollText = ""
-            detectedLanguage = nil
-            languageRechecked = false
             let modifier = QuickActionModifier(
                 rawValue: UserDefaults.standard.string(forKey: PrefKey.quickActionsModifier) ?? "") ?? .command
             quickActionsForced = modifier != .none
                 && NSEvent.modifierFlags.intersection(.deviceIndependentFlagsMask).contains(modifier.flags)
             quickActionsArmed = modifier == .none || quickActionsForced
-            incrementalActive = currentMode() == .realtime
-                && currentInsertion() == .incremental
-                && permissions.accessibilityTrusted
-            if currentMode() == .realtime {
-                hud.show()
-                startRealtimePolling()
-            }
         } catch {
-            Telemetry.capture(.recordingStartFailed, ["error_type": String(describing: type(of: error))])
             state.setError(AppError("Couldn't start recording", hint: error.localizedDescription))
         }
     }
 
     func endRecording(silent: Bool = false) {
-        guard state.isRecording, !selectionRewriteActive else { return }
+        guard state.isRecording, !selectionRewriteActive, !stopping else { return }
+        stopping = true
         stopEscMonitor()
-        stopRealtimePolling()
-        let samples = recorder.stop()
+        // The tone marks the key-up; the recorder carries on a moment longer
+        // so the word being finished as the key lifted isn't cut off.
         if !silent { SoundService.play(.stop) }
-        state.setStatus(.transcribing)
-        Task { await finishPipeline(samples: samples) }
+        Task {
+            let samples = await recorder.stopAfterTail()
+            recordingDidStop()
+            DevLog.write("end: \(samples.map { "\($0.count) samples, loudest \(Int(AudioLevel.loudestWindowDB($0))) dBFS" } ?? "stopped elsewhere")")
+            guard let samples else {
+                // Stopped by something else while the tail ran out.
+                if state.isRecording { state.setStatus(.idle) }
+                return
+            }
+            state.setStatus(.transcribing)
+            await finishPipeline(samples: samples)
+        }
     }
 
-    /// Esc: abort recording without transcribing, and hide the HUD.
+    /// Esc: abort recording without transcribing.
     func cancelRecording() {
         guard state.isRecording else { return }
+        DevLog.write("cancel")
         stopEscMonitor()
-        stopRealtimePolling()
         _ = recorder.stop()          // discard samples
-        incrementalActive = false
+        recordingDidStop()
         // Abandon an in-flight selection rewrite too: the clipboard already
         // holds the copied selection, but nothing is pasted back.
         selectionRewriteActive = false
         selectionTask?.cancel()
         selectionTask = nil
-        hud.hide()
-        state.clearLive()
         state.setStatus(.idle)
     }
 
@@ -508,7 +507,7 @@ final class Coordinator: ObservableObject {
         guard style.config != nil else {
             state.setError(AppError(
                 style.loadError ?? "style.json couldn't be read",
-                hint: "fix it in Settings → Style, then try again"))
+                hint: "fix it in Settings → Rewrite style, then try again"))
             return
         }
         guard aiConfig() != nil else {
@@ -528,15 +527,14 @@ final class Coordinator: ObservableObject {
 
         do {
             try recorder.start()
-            state.clearLive()
+            recordingDidStart()
             state.lastWarning = nil
             state.clearError()
             state.setStatus(.recording)
             SoundService.play(.start)
             startEscMonitor()
             selectionRewriteActive = true
-            detectedLanguage = nil
-            incrementalActive = false          // never type live into a rewrite
+            DevLog.write("rewrite: listening for the instruction (\(preread == nil ? "copying the selection" : "selection read directly"))")
             let app = targetApp
             if let preread {
                 selectionTask = Task { preread }
@@ -576,19 +574,35 @@ final class Coordinator: ObservableObject {
 
     /// Hotkey up: transcribe the instruction, rewrite, paste over the selection.
     func endSelectionRewrite() {
-        guard selectionRewriteActive, state.isRecording else { return }
+        guard selectionRewriteActive, state.isRecording, !stopping else { return }
+        if Coordinator.heldTooBriefly(since: recordingStartedAt) {
+            DevLog.write("rewrite: held too briefly, dropped")
+            dropBriefHold()
+            return
+        }
+        stopping = true
         stopEscMonitor()
-        let samples = recorder.stop()
         SoundService.play(.stop)
-        state.setStatus(.transcribing)
-        Task { await finishSelectionRewrite(samples: samples) }
+        Task {
+            let samples = await recorder.stopAfterTail()
+            recordingDidStop()
+            DevLog.write("rewrite: instruction recorded, \(samples?.count ?? 0) samples")
+            guard let samples else {
+                if state.isRecording { state.setStatus(.idle) }
+                selectionRewriteActive = false
+                selectionTask?.cancel()
+                selectionTask = nil
+                return
+            }
+            state.setStatus(.transcribing)
+            await finishSelectionRewrite(samples: samples)
+        }
     }
 
     private func finishSelectionRewrite(samples: [Float]) async {
         defer {
             selectionRewriteActive = false
             selectionTask = nil
-            state.clearLive()
         }
 
         // The selection is the thing we can't proceed without, so resolve it
@@ -607,6 +621,7 @@ final class Coordinator: ObservableObject {
 
         let transcript: String
         do {
+            guard !AudioLevel.isSilent(samples) else { throw TranscriptionService.TranscriptionError.empty }
             transcript = try await transcription.transcribe(
                 samples: samples,
                 selection: languageSelection(),
@@ -630,6 +645,7 @@ final class Coordinator: ObservableObject {
             return
         }
 
+        DevLog.write("rewrite: \(selection.count) characters selected, instruction of \(transcript.count) characters")
         await applyRewrite(selection: selection, instruction: transcript)
     }
 
@@ -642,7 +658,7 @@ final class Coordinator: ObservableObject {
         style.reload()
         guard style.config != nil else {
             state.setError(AppError(style.loadError ?? "style.json couldn't be read",
-                                    hint: "fix it in Settings → Style, then try again"))
+                                    hint: "fix it in Settings → Rewrite style, then try again"))
             return
         }
         guard aiConfig() != nil else {
@@ -718,7 +734,7 @@ final class Coordinator: ObservableObject {
     func applyRewrite(selection: String, instruction: String) async {
         guard let styleConfig = style.config else {
             state.setError(AppError(style.loadError ?? "style.json couldn't be read",
-                                    hint: "fix it in Settings → Style, then try again"))
+                                    hint: "fix it in Settings → Rewrite style, then try again"))
             return
         }
         guard let config = aiConfig() else {
@@ -754,6 +770,7 @@ final class Coordinator: ObservableObject {
 
         switch outcome {
         case .failed(let reason):
+            DevLog.write("rewrite: failed, \(reason)")
             // Nothing usable came back, so nothing is pasted — the user's text
             // is left exactly as it was.
             state.setError(AppError(reason, hint: "your selection wasn't changed"))
@@ -796,7 +813,7 @@ final class Coordinator: ObservableObject {
         escMonitorGlobal = NSEvent.addGlobalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { Task { @MainActor in self?.cancelRecording() } }
         }
-        // Local: Esc pressed while our own window (e.g. the HUD) is focused.
+        // Local: Esc pressed while one of our own windows is focused.
         escMonitorLocal = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             if event.keyCode == 53 { self?.cancelRecording(); return nil }
             return event
@@ -808,117 +825,27 @@ final class Coordinator: ObservableObject {
         if let m = escMonitorLocal { NSEvent.removeMonitor(m); escMonitorLocal = nil }
     }
 
-    // MARK: - realtime polling
-
-    private func startRealtimePolling() {
-        realtimeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.pollRealtime() }
-        }
-    }
-
-    private func stopRealtimePolling() {
-        realtimeTimer?.invalidate()
-        realtimeTimer = nil
-        realtimeTask?.cancel()
-        realtimeTask = nil
-    }
-
-    private func pollRealtime() {
-        guard realtimeTask == nil else { return }   // skip if previous pass still running
-        let snapshot = recorder.snapshot()
-        guard snapshot.count > Int(AudioRecorder.targetSampleRate) / 2 else { return }
-        realtimeTask = Task { [weak self] in
-            guard let self else { return }
-            let text = try? await self.transcription.transcribe(
-                samples: snapshot,
-                selection: await self.realtimeSelection(snapshot: snapshot),
-                vocabulary: self.vocabulary.terms
-            )
-            if let text, !Task.isCancelled {
-                self.state.liveHypothesis = text
-                self.insertConfirmedDelta(from: text)
-            }
-            self.realtimeTask = nil
-        }
-    }
-
-    /// Incremental insertion: a prefix that's identical across two consecutive
-    /// transcription passes is treated as "confirmed" and typed at the cursor
-    /// (only the part we haven't typed yet).
-    private func insertConfirmedDelta(from text: String) {
-        guard incrementalActive else { return }
-        let stable = String(text.commonPrefix(with: lastPollText))
-        lastPollText = text
-        guard stable.count > liveInsertedText.count, stable.hasPrefix(liveInsertedText) else { return }
-        // If nothing has keyboard focus right now, don't type — and don't mark
-        // the delta as inserted, so it's retried on a later poll (or delivered
-        // with the final remainder) instead of being lost.
-        guard FocusInspector.focusStatus() != .noFocus else { return }
-        let delta = String(stable.dropFirst(liveInsertedText.count))
-        TextInserter.typeString(delta, targetApp: targetApp)
-        liveInsertedText = stable
-    }
-
     // MARK: - pipeline tail
 
     private func finishPipeline(samples: [Float]) async {
         do {
-            // Always re-derive the selection fresh for the final decode — do
-            // NOT reuse `detectedLanguage` from realtime polling. That cache
-            // is only a rough guess from the first ~2s of audio (kept solely
-            // to avoid re-detecting on every poll and to stop live captions
-            // flip-flopping mid-recording); pinning the FINAL, complete-
-            // recording decode to an early guess risks forcing the whole
-            // transcript into the wrong language on a bad guess, which can
-            // degrade output all the way down to nothing. Letting transcribe()
-            // detect fresh here uses the full recording, same as batch mode
-            // already does, which is far more reliable than a 2s snapshot.
-            let raw = try await transcription.transcribe(
+            // Nothing louder than room noise means nothing was said. Stop here:
+            // given silence, the model invents a closing phrase ("Thank you.")
+            // and that would be pasted into the document.
+            guard !AudioLevel.isSilent(samples) else { throw TranscriptionService.TranscriptionError.empty }
+            // What the user has corrected before is put right before anything
+            // else sees the transcript.
+            let raw = corrections.apply(to: try await transcription.transcribe(
                 samples: samples,
                 selection: languageSelection(),
                 vocabulary: vocabulary.terms
-            )
-            state.liveConfirmed = raw
+            ))
             // Your own words, in your own phrasing. Harvested *before* the LLM
             // cleanup below — the cleaned version is the model's prose, and
             // learning from it would teach the app to imitate itself.
             // Pass the language transcription already settled on — more reliable
             // than re-detecting from a short transcript, and free.
             learner.harvestDictation(raw, language: transcribedLanguage())
-
-            // Incremental live-insertion: we've already typed the confirmed prefix
-            // during recording. Type only the final remainder, and skip rewrite
-            // (it would reformat text already in the document).
-            if incrementalActive {
-                let remainder: String
-                if raw.hasPrefix(liveInsertedText) {
-                    remainder = String(raw.dropFirst(liveInsertedText.count))
-                } else {
-                    remainder = String(raw.dropFirst(raw.commonPrefix(with: liveInsertedText).count))
-                }
-                if !remainder.isEmpty && FocusInspector.focusStatus() == .noFocus {
-                    // Nowhere for the keystrokes to land — put the full
-                    // transcript on the clipboard rather than typing into
-                    // the void, so nothing is lost.
-                    ClipboardService.set(raw)
-                    state.setError(AppError(
-                        "Nothing was focused to type into (copied to clipboard instead)",
-                        hint: "click where you want the text and press ⌘V"))
-                } else {
-                    TextInserter.typeString(remainder, targetApp: targetApp)
-                }
-                state.lastTranscript = raw
-                reportRecording("delivered", samples: samples)
-                // Same reason as the batch path below: this text is now in the
-                // document, and selecting it later must not be mistaken for
-                // hand-typed prose — its punctuation is the transcriber's.
-                learner.noteProduced(raw)
-                SoundService.play(.done)
-                if case .error = state.status {} else { state.setStatus(.idle) }
-                hud.hide()
-                state.clearLive()
-                return
-            }
 
             // Voice quick actions (opt-in): if the utterance matches a
             // user-defined command, run it instead of pasting anything.
@@ -927,28 +854,21 @@ final class Coordinator: ObservableObject {
                     state.lastTranscript = raw
                     switch QuickActionExecutor.execute(match.action, query: match.query) {
                     case .success:
-                        reportRecording("quick_action", samples: samples)
                         SoundService.play(.done)
                         state.setStatus(.idle)
                     case .failure(let err):
-                        reportRecording("quick_action_failed", samples: samples)
                         state.setError(AppError(err.message, hint: err.hint))
                     }
-                    hud.hide()
-                    state.clearLive()
                     return
                 }
                 // Modifier held = explicit action mode. A miss must not paste —
                 // the user signalled a command, not dictation.
                 if quickActionsForced {
-                    reportRecording("no_action_matched", samples: samples)
                     state.lastTranscript = raw
                     ClipboardService.set(raw)
                     state.setError(AppError(
                         "No quick action matched",
                         hint: "copied “\(raw.prefix(40))” to the clipboard instead"))
-                    hud.hide()
-                    state.clearLive()
                     return
                 }
             }
@@ -970,48 +890,32 @@ final class Coordinator: ObservableObject {
             }
 
             state.lastTranscript = finalText
+            history.add(finalText)
+            DevLog.write("pipeline: delivering \(finalText.count) characters")
             // Remember what lands in the document. Without this, selecting a
             // previously-dictated (and LLM-cleaned) paragraph to rewrite would
             // classify it as the user's own writing and harvest the cleanup
             // model's prose — and its punctuation — into the corpus.
             learner.noteProduced(finalText)
             deliver(finalText)
-            reportRecording("delivered", samples: samples)
             SoundService.play(.done)
             if case .error = state.status {} else { state.setStatus(.idle) }
         } catch let error as TranscriptionService.TranscriptionError {
+            DevLog.write("pipeline: \(error)")
             switch error {
             case .empty:
-                reportRecording("empty", samples: samples)
                 // Benign: nothing was said. Keep this a soft warning, not an error.
                 state.setStatus(.idle)
                 state.lastWarning = "No speech detected."
             case .modelNotLoaded:
-                reportRecording("model_not_ready", samples: samples)
                 state.setError(AppError(
                     "Transcription model isn't ready",
                     hint: "wait for it to finish loading, or pick one in Settings → Model"))
             }
         } catch {
-            reportRecording("failed", samples: samples)
+            DevLog.write("pipeline: failed, \(type(of: error))")
             state.setError(AppError("Transcription failed", hint: error.localizedDescription))
         }
-        hud.hide()
-        state.clearLive()
-    }
-
-    /// How a dictation ended, with the recording's length and loudest sample —
-    /// enough to tell silent captures from real failures, without any content.
-    private func reportRecording(_ outcome: String, samples: [Float]) {
-        guard Telemetry.isEnabled() else { return }
-        let peak = samples.reduce(Float(0)) { max($0, abs($1)) }
-        Telemetry.capture(.recordingFinished, [
-            "outcome": outcome,
-            "mode": currentMode().rawValue,
-            "model": UserDefaults.standard.string(forKey: PrefKey.selectedModel) ?? "base",
-            "audio_seconds": (Double(samples.count) / AudioRecorder.targetSampleRate * 10).rounded() / 10,
-            "audio_peak": (Double(peak) * 1000).rounded() / 1000
-        ])
     }
 
     private func deliver(_ text: String) {
@@ -1032,8 +936,8 @@ final class Coordinator: ObservableObject {
                 permissions.openAccessibilitySettings()
                 return
             }
-            let restore = UserDefaults.standard.bool(forKey: PrefKey.restoreClipboard)
-            TextInserter.insert(text, restoreClipboard: restore, targetApp: targetApp) { [weak self] result in
+            // Whatever was on the clipboard before comes back after the paste.
+            TextInserter.insert(text, restoreClipboard: true, targetApp: targetApp) { [weak self] result in
                 Task { @MainActor in
                     guard result == .copiedOnly else { return }
                     self?.state.setError(AppError(
@@ -1044,15 +948,37 @@ final class Coordinator: ObservableObject {
         }
     }
 
+    /// The user rewrote a past dictation to what they meant. Three things
+    /// learn from it: the swaps are applied to every later transcript, names
+    /// and jargon join the vocabulary that biases recognition, and the pair
+    /// goes to the rewrite model with the user's other edits. Returns how many
+    /// swaps were learned.
+    @discardableResult
+    func correctDictation(_ id: UUID, to text: String) -> Int {
+        guard let original = history.correct(id, to: text),
+              let entry = history.entries.first(where: { $0.id == id }) else { return 0 }
+        let learned = corrections.learn(from: original, to: entry.text)
+        for swap in CorrectionDiff.replacements(from: original, to: entry.text) {
+            CorrectionDiff.vocabularyTerms(in: swap.meant).forEach(vocabulary.add)
+        }
+        learner.recordCorrection(produced: original, corrected: entry.text)
+        if state.lastTranscript == original { state.lastTranscript = entry.text }
+        return learned.count
+    }
+
+    /// Pastes the most recent dictation again at the cursor: the way back when
+    /// a transcript went to the wrong window, or nowhere.
+    func pasteLastDictation() {
+        guard !state.isRecording, !state.isBusy, !selectionRewriteActive else { return }
+        guard let text = history.latest else {
+            state.lastWarning = "No dictation to paste yet."
+            return
+        }
+        captureTargetApp()
+        deliver(text)
+    }
+
     // MARK: - helpers
-
-    private func currentMode() -> TranscriptionMode {
-        TranscriptionMode(rawValue: UserDefaults.standard.string(forKey: PrefKey.transcriptionMode) ?? "") ?? .batch
-    }
-
-    private func currentInsertion() -> RealtimeInsertion {
-        RealtimeInsertion(rawValue: UserDefaults.standard.string(forKey: PrefKey.realtimeInsertion) ?? "") ?? .onStop
-    }
 
     private func selectedLanguageCodes() -> Set<String> {
         let stored = UserDefaults.standard.string(forKey: PrefKey.preferredLanguages)
@@ -1069,9 +995,6 @@ final class Coordinator: ObservableObject {
     /// `nil` when the model auto-detected freely and didn't tell us. Used to tag
     /// harvested samples so style stays per-language.
     private func transcribedLanguage() -> String? {
-        if let detectedLanguage, !detectedLanguage.isEmpty {
-            return LanguageDetector.normalize(detectedLanguage)
-        }
         // A single selected language pins every recording to it.
         let codes = selectedLanguageCodes()
         guard codes.count == 1, let only = codes.first, !only.isEmpty else { return nil }
@@ -1087,38 +1010,6 @@ final class Coordinator: ObservableObject {
         let codes = selectedLanguageCodes()
         guard codes.count > 1 else { return [] }
         return WhisperLanguage.labels(for: codes)
-    }
-
-    /// Language policy for a realtime pass. Polling re-transcribes the whole
-    /// buffer every ~1.5 s, and re-detecting on each pass could flip the
-    /// language mid-recording and corrupt incremental insertion — so in
-    /// restricted mode the language is detected once (after ~2 s of audio)
-    /// and pinned. A 2 s guess is fragile for bilingual speakers (an opening
-    /// loanword or filler can pin the wrong language for the whole recording),
-    /// so the guess is re-verified exactly once against the fuller buffer at
-    /// ~6 s and corrected if it disagrees. Incremental insertion tolerates the
-    /// one-time flip: the confirmed-prefix logic simply stops extending until
-    /// the new decode overtakes what was already typed.
-    private func realtimeSelection(snapshot: [Float]) async -> LanguageSelection {
-        let selection = languageSelection()
-        guard case .restricted(let candidates) = selection else { return selection }
-        let rate = Int(AudioRecorder.targetSampleRate)
-        if let cached = detectedLanguage {
-            if !languageRechecked && snapshot.count >= rate * 6 {
-                languageRechecked = true
-                if let rechecked = try? await transcription.detectLanguage(samples: snapshot, among: candidates),
-                   !rechecked.isEmpty {
-                    detectedLanguage = rechecked
-                    return .pinned(rechecked)
-                }
-            }
-            return .pinned(cached)
-        }
-        guard snapshot.count >= rate * 2 else { return .auto }
-        guard let detected = try? await transcription.detectLanguage(samples: snapshot, among: candidates),
-              !detected.isEmpty else { return .auto }
-        detectedLanguage = detected
-        return .pinned(detected)
     }
 
     /// Hybrid quick-action detection: instant local trigger match first, then

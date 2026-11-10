@@ -31,6 +31,8 @@ enum Looped {
 
     static let radius: CGFloat = 3
     static let gutter: CGFloat = 28
+    static let railHeight: CGFloat = 52     // the app header, --topbar-h
+    static let footHeight: CGFloat = 52     // the sidebar's foot and a page's foot
 
     private static func dynamic(_ day: UInt32, _ night: UInt32) -> Color {
         Color(nsColor: NSColor(name: nil) { appearance in

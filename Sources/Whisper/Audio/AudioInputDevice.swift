@@ -1,5 +1,6 @@
 import Foundation
 import CoreAudio
+import IOKit
 import Combine
 
 /// A selectable audio input device. Identified by its persistent device UID so the
@@ -47,6 +48,42 @@ enum AudioInputDevices {
         )
         guard status == noErr, deviceID != 0 else { return nil }
         return deviceID
+    }
+
+    /// The built-in microphone's device ID, when the system default input is a
+    /// Bluetooth device and the built-in mic can be used instead. Nil in every
+    /// other case, including a closed lid, where the built-in mic hears nothing.
+    static func builtInInsteadOfBluetoothDefault() -> AudioDeviceID? {
+        guard let current = systemDefaultInputDeviceID(),
+              isBluetooth(transportType(of: current)),
+              !lidIsClosed() else { return nil }
+        return all().first { transportType(of: $0.deviceID) == kAudioDeviceTransportTypeBuiltIn }?.deviceID
+    }
+
+    static func isBluetooth(_ transport: UInt32) -> Bool {
+        transport == kAudioDeviceTransportTypeBluetooth || transport == kAudioDeviceTransportTypeBluetoothLE
+    }
+
+    private static func transportType(of id: AudioDeviceID) -> UInt32 {
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioDevicePropertyTransportType,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain
+        )
+        var transport: UInt32 = 0
+        var size = UInt32(MemoryLayout<UInt32>.size)
+        guard AudioObjectGetPropertyData(id, &address, 0, nil, &size, &transport) == noErr else { return 0 }
+        return transport
+    }
+
+    /// True on a laptop running with its lid shut (docked to a display).
+    private static func lidIsClosed() -> Bool {
+        let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("IOPMrootDomain"))
+        guard service != 0 else { return false }
+        defer { IOObjectRelease(service) }
+        let state = IORegistryEntryCreateCFProperty(
+            service, "AppleClamshellState" as CFString, kCFAllocatorDefault, 0)?.takeRetainedValue()
+        return (state as? Bool) ?? false
     }
 
     // MARK: - Core Audio helpers

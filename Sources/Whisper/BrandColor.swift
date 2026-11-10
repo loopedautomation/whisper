@@ -11,23 +11,38 @@ extension Color {
     }
 }
 
-/// Shared brand + status colors used throughout the app (menu bar, HUD, etc.).
+/// The Looped brand's state colours for the menu bar icon, in the brand's Day
+/// and Night values. Each is a fill with the glyph colour that goes on it,
+/// and the glyph is always white, so every fill is a deep one.
 enum BrandColor {
-    static let primary      = Color(hex: 0x685EF6)   // app accent
-    static let recording    = Color(hex: 0xED9B00)
-    static let transcribing = Color(hex: 0x685EF6)   // also loading / rewriting
-    static let error        = Color(hex: 0xD02E1F)
-    static let success      = Color(hex: 0x37946A)
-}
+    struct Pill {
+        let fill: Color
+        let glyph: Color
+    }
 
-extension AppStatus {
-    /// Tint color for the current state, or nil when idle.
-    var tint: Color? {
-        switch self {
-        case .recording:                                return BrandColor.recording
-        case .transcribing, .rewriting, .loadingModel:  return BrandColor.transcribing
-        case .error:                                    return BrandColor.error
-        case .idle:                                     return nil
-        }
+    private static let white = Color.white
+
+    /// Orange: the microphone is on. Not a brand colour, on purpose: it is
+    /// the orange macOS itself shows while the microphone is in use, so the
+    /// two indicators read as the same thing. The same in Day and Night.
+    static func recording(dark: Bool) -> Pill {
+        Pill(fill: Color(hex: 0xED9B00), glyph: white)
+    }
+
+    /// Moss green: an AI model is rewriting text. The deep Day value in both
+    /// modes, for the white glyph.
+    static func rewriting(dark: Bool) -> Pill {
+        Pill(fill: Color(hex: 0x4B7A3F), glyph: white)
+    }
+
+    /// Violet (accent-fill): transcribing, or loading a model.
+    static func working(dark: Bool) -> Pill {
+        Pill(fill: Color(hex: dark ? 0x7358D6 : 0x6554C0), glyph: white)
+    }
+
+    /// Oxblood: something went wrong. The deep Day value in both modes; the
+    /// lighter Night oxblood can't carry a white glyph.
+    static func error(dark: Bool) -> Pill {
+        Pill(fill: Color(hex: 0xA8322C), glyph: white)
     }
 }

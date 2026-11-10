@@ -2,7 +2,7 @@ import Foundation
 import Combine
 import SwiftUI
 
-/// High-level recording / pipeline status surfaced in the menu bar and HUD.
+/// High-level recording / pipeline status surfaced in the menu bar.
 enum AppStatus: Equatable {
     case idle
     case loadingModel(String)
@@ -33,7 +33,7 @@ enum AppStatus: Equatable {
     }
 }
 
-/// A user-facing error surfaced in the menu bar (and as a transient HUD/status).
+/// A user-facing error surfaced in the menu bar (and as a transient status).
 /// Carries a short headline plus an optional recovery hint so the UI can render
 /// something actionable (e.g. "enable it in System Settings").
 struct AppError: Equatable {
@@ -57,9 +57,6 @@ struct AppError: Equatable {
 final class AppState: ObservableObject {
     @Published var status: AppStatus = .idle
     @Published var lastTranscript: String = ""
-    /// Live caption for realtime mode: confirmed (locked) + hypothesis (tentative).
-    @Published var liveConfirmed: String = ""
-    @Published var liveHypothesis: String = ""
     /// Non-fatal warning shown in the menu (e.g. rewrite fell back to raw text).
     @Published var lastWarning: String?
     /// User-facing error surfaced in the menu bar dropdown. Cleared on the next
@@ -111,10 +108,5 @@ final class AppState: ObservableObject {
         }
         errorClearWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
-    }
-
-    func clearLive() {
-        liveConfirmed = ""
-        liveHypothesis = ""
     }
 }

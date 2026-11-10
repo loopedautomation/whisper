@@ -14,7 +14,7 @@ struct WhisperApp: App {
 
         Settings {
             SettingsView(coordinator: coordinator)
-                .frame(width: 800, height: 560)
+                .frame(width: 840, height: 720)
                 .floatingWindow()   // keep Settings above other apps
         }
     }

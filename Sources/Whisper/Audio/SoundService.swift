@@ -10,7 +10,7 @@ enum SoundEvent: String, CaseIterable, Identifiable {
         switch self {
         case .start: return "Recording started"
         case .stop:  return "Recording stopped"
-        case .toggle: return "Toggle recording"
+        case .toggle: return "Toggle dictation"
         case .done:  return "Transcription ready"
         }
     }

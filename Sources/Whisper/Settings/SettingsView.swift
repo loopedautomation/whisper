@@ -6,7 +6,7 @@ private let d = UserDefaults.standard
 // MARK: - Shell
 
 private enum SettingsPane: String, CaseIterable, Identifiable {
-    case general, model, hotkeys, sounds, vocabulary, ai, actions, style, permissions, about
+    case general, model, hotkeys, sounds, vocabulary, history, ai, actions, style, status, permissions, about
     var id: String { rawValue }
 
     var title: String {
@@ -16,9 +16,11 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .hotkeys:     return "Hotkeys"
         case .sounds:      return "Sounds"
         case .vocabulary:  return "Vocabulary"
-        case .ai:          return "AI"
+        case .history:     return "History"
+        case .ai:          return "Provider"
         case .actions:     return "Actions"
-        case .style:       return "Style"
+        case .style:       return "Rewrite style"
+        case .status:      return "Status"
         case .permissions: return "Permissions"
         case .about:       return "About"
         }
@@ -31,23 +33,36 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
         case .hotkeys:     return "keyboard"
         case .sounds:      return "speaker.wave.2"
         case .vocabulary:  return "character.book.closed"
+        case .history:     return "clock.arrow.circlepath"
         case .ai:          return "wand.and.stars"
         case .actions:     return "bolt"
         case .style:       return "textformat"
+        case .status:      return "menubar.rectangle"
         case .permissions: return "lock.shield"
         case .about:       return "info.circle"
         }
     }
+
+    /// The sidebar's sections, in order.
+    static let sections: [(title: String, panes: [SettingsPane])] = [
+        ("Dictation", [.general, .model, .hotkeys, .sounds, .vocabulary, .history]),
+        ("AI",        [.ai, .actions, .style]),
+        ("App",       [.status, .permissions, .about]),
+    ]
 
     /// One line under the page title, where the page needs introducing.
     var subtitle: String? {
         switch self {
         case .vocabulary:
             return "Terms here bias recognition and are preserved during rewrite. Changes save immediately to a JSON file you can also hand-edit."
+        case .history:
+            return "Everything you have dictated, kept on this Mac. Correct a transcript to what you meant and the app learns from it."
         case .ai:
             return "Used by everything that calls a model: rewriting a selection, language repair, and quick-action matching."
         case .style:
             return "Select text in any app, hold the Rewrite shortcut, and say what you want. The selection is replaced in place."
+        case .status:
+            return "The icon in your menu bar changes colour to show what Looped Whisper is doing."
         default:
             return nil
         }
@@ -57,47 +72,100 @@ private enum SettingsPane: String, CaseIterable, Identifiable {
 struct SettingsView: View {
     @ObservedObject var coordinator: Coordinator
     @State private var pane: SettingsPane = .general
+    @AppStorage("settingsSidebarCollapsed") private var sidebarCollapsed = false
 
     var body: some View {
-        HStack(spacing: 0) {
-            sidebar
-            Rectangle().fill(Looped.rule).frame(width: 1)
-            VStack(alignment: .leading, spacing: 0) {
-                header
-                content
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        VStack(spacing: 0) {
+            rail
+            Rectangle().fill(Looped.rule).frame(height: 1)
+            HStack(spacing: 0) {
+                sidebar
+                Rectangle().fill(Looped.rule).frame(width: 1)
+                VStack(alignment: .leading, spacing: 0) {
+                    header
+                    content
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                }
             }
         }
+        .ignoresSafeArea(.container, edges: .top)
         .font(.sans(13))
         .foregroundStyle(Looped.ink)
         .tint(Looped.accentFill)
         .background(Looped.paper)
         .containerBackground(Looped.paper, for: .window)
-        .navigationTitle(pane.title)
+        .navigationTitle("Whisper")
+        .toolbar(removing: .title)   // the rail carries the name
+        .railTitlebar()
     }
 
+    /// The Looped rail header (brand.looped.sh, Patterns/App header "Rail"):
+    /// a slim bar across the window with the app name centred in spaced mono.
+    /// It sits under the title bar, so the window controls rest in its left
+    /// edge and the whole bar drags the window.
+    private var rail: some View {
+        Text("WHISPER")
+            .font(.mono(11, bold: true)).tracking(3.3)
+            .foregroundStyle(Looped.ink)
+            .frame(maxWidth: .infinity)
+            .frame(height: Looped.railHeight)
+            .accessibilityHidden(true)
+    }
+
+    /// The app sidebar rail: items run edge to edge, and it collapses to an
+    /// icon rail from the toggle in its foot (or ⌘B).
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 0) {
-            VStack(alignment: .leading, spacing: 3) {
-                // The wordmark is typed text, always Work Sans.
-                Text("looped.sh")
-                    .font(.sans(17, weight: 500)).tracking(-0.5)
-                    .foregroundStyle(Looped.ink)
-                Eyebrow("Whisper")
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(SettingsPane.sections.enumerated()), id: \.offset) { index, section in
+                        // Collapsed, the labels go and a rule stands between sections.
+                        if sidebarCollapsed {
+                            if index > 0 {
+                                Rectangle().fill(Looped.rule).frame(height: 1)
+                                    .padding(.vertical, 12)
+                            }
+                        } else {
+                            Text(section.title.uppercased())
+                                .font(.mono(9)).tracking(1)
+                                .foregroundStyle(Looped.ink3)
+                                .padding(.horizontal, 20)
+                                .padding(.top, index > 0 ? 24 : 0)
+                                .padding(.bottom, 8)
+                                .accessibilityAddTraits(.isHeader)
+                        }
+                        VStack(spacing: 2) {
+                            ForEach(section.panes) { item in
+                                SidebarItem(pane: item, selected: pane == item,
+                                            collapsed: sidebarCollapsed) { pane = item }
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 20)
             }
-            .padding(.horizontal, 18).padding(.top, 6).padding(.bottom, 18)
+            .scrollIndicators(.hidden)
 
-            VStack(spacing: 1) {
-                ForEach(SettingsPane.allCases) { item in
-                    SidebarItem(pane: item, selected: pane == item) { pane = item }
+            Rectangle().fill(Looped.rule).frame(height: 1)
+            HStack(spacing: 9) {
+                if !sidebarCollapsed {
+                    Text("v\(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "")")
+                        .font(.mono(9)).tracking(0.2)
+                        .foregroundStyle(Looped.ink3)
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
+                SidebarToggle(collapsed: sidebarCollapsed) {
+                    withAnimation(.easeInOut(duration: 0.16)) { sidebarCollapsed.toggle() }
                 }
             }
-            .padding(.horizontal, 8)
-
-            Spacer()
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, sidebarCollapsed ? 0 : 20)
+            .frame(height: Looped.footHeight)
         }
-        .frame(width: 184)
+        .frame(width: sidebarCollapsed ? 56 : 218)
         .frame(maxHeight: .infinity, alignment: .top)
+        .clipped()
     }
 
     private var header: some View {
@@ -110,7 +178,7 @@ struct SettingsView: View {
             }
         }
         .padding(.horizontal, Looped.gutter)
-        .padding(.top, 6)
+        .padding(.top, 22)
         .padding(.bottom, 4)
     }
 
@@ -121,9 +189,11 @@ struct SettingsView: View {
         case .hotkeys:     HotkeysTab(coordinator: coordinator)
         case .sounds:      SoundsTab()
         case .vocabulary:  VocabularyTab(vocabulary: coordinator.vocabulary)
+        case .history:     HistoryTab(coordinator: coordinator)
         case .ai:          AITab()
         case .actions:     ActionsTab(store: coordinator.quickActions)
         case .style:       StyleTab(style: coordinator.style, learner: coordinator.learner)
+        case .status:      StatusTab(state: coordinator.state)
         case .permissions: PermissionsTab(permissions: coordinator.permissions)
         case .about:       AboutTab(coordinator: coordinator)
         }
@@ -135,113 +205,91 @@ struct SettingsView: View {
 private struct SidebarItem: View {
     let pane: SettingsPane
     let selected: Bool
+    let collapsed: Bool
     let action: () -> Void
     @State private var hovering = false
 
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 10) {
+            HStack(spacing: 13) {
                 Image(systemName: pane.symbol)
                     .font(.system(size: 13, weight: .light))
-                    .frame(width: 18)
-                Text(pane.title)
-                    .font(.sans(13, weight: selected ? 500 : 400))
-                Spacer(minLength: 0)
+                    .frame(width: 16)
+                if !collapsed {
+                    Text(pane.title)
+                        .font(.sans(12, weight: selected ? 500 : 400))
+                        .lineLimit(1)
+                    Spacer(minLength: 0)
+                }
             }
-            .foregroundStyle(selected ? Looped.accent : Looped.ink2)
-            .padding(.horizontal, 10).padding(.vertical, 6)
-            .background(RoundedRectangle(cornerRadius: Looped.radius)
-                .fill(hovering ? Looped.shade : .clear))
+            .frame(maxWidth: .infinity)
+            .foregroundStyle(selected ? Looped.accent : (hovering ? Looped.ink : Looped.ink2))
+            .padding(.horizontal, collapsed ? 0 : 20).padding(.vertical, 10)
+            .background(hovering ? Looped.shade : .clear)
             .overlay(alignment: .leading) {
                 if selected {
                     Rectangle().fill(Looped.accent)
-                        .frame(width: 2).padding(.vertical, 6)
+                        .frame(width: 2).padding(.vertical, 8)
                 }
             }
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+        .help(collapsed ? pane.title : "")
+        .accessibilityLabel(pane.title)
         .accessibilityAddTraits(selected ? .isSelected : [])
     }
 }
 
-// MARK: - Reusable Save button with Saving… / Saved states
-
-enum SaveState { case idle, saving, saved }
-
-struct SaveButton: View {
-    var disabled: Bool = false
+/// The quiet square control in the sidebar's foot that collapses the rail.
+private struct SidebarToggle: View {
+    let collapsed: Bool
     let action: () -> Void
-    @State private var state: SaveState = .idle
+    @State private var hovering = false
 
     var body: some View {
-        Button(action: trigger) {
-            Group {
-                switch state {
-                case .idle:
-                    Text("Save")
-                case .saving:
-                    HStack(spacing: 5) {
-                        ProgressView().controlSize(.mini).tint(Looped.accentText)
-                        Text("Saving…")
-                    }
-                case .saved:
-                    Label("Saved", systemImage: "checkmark")
-                }
-            }
-            .frame(width: 76)
+        Button(action: action) {
+            Image(systemName: collapsed ? "chevron.right.2" : "chevron.left.2")
+                .font(.system(size: 11, weight: .light))
+                .foregroundStyle(hovering ? Looped.ink : Looped.ink3)
+                .frame(width: 28, height: 28)
+                .background(RoundedRectangle(cornerRadius: 2)
+                    .fill(hovering ? Looped.shade : .clear))
+                .contentShape(Rectangle())
         }
-        .buttonStyle(.primary)
-        .keyboardShortcut("s", modifiers: .command)
-        .disabled(disabled || state != .idle)
-    }
-
-    private func trigger() {
-        state = .saving
-        action()
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) {
-            withAnimation { state = .saved }
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {
-                withAnimation { state = .idle }
-            }
-        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .keyboardShortcut("b", modifiers: .command)
+        .help("\(collapsed ? "Expand" : "Collapse") sidebar · ⌘B")
+        .accessibilityLabel(collapsed ? "Expand sidebar" : "Collapse sidebar")
     }
 }
 
-/// A page footer below a rule: optional leading content, Save on the right.
-private struct SaveBar<Leading: View>: View {
-    var disabled: Bool
-    @ViewBuilder var leading: () -> Leading
-    let action: () -> Void
+// MARK: - Saving
+
+/// Settings save as they change; there is no Save button. A page puts one of
+/// these at its foot with everything it edits as `key`.
+private struct AutoSave<Key: Equatable>: View {
+    let key: Key
+    let save: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            Rule()
-            HStack(spacing: 8) {
-                leading()
-                Spacer()
-                SaveButton(disabled: disabled, action: action)
-            }
-            .padding(.horizontal, Looped.gutter).padding(.vertical, 12)
-        }
+        Color.clear.frame(height: 0)
+            .onChange(of: key) { save() }
     }
 }
 
-extension SaveBar where Leading == EmptyView {
-    init(disabled: Bool, action: @escaping () -> Void) {
-        self.init(disabled: disabled, leading: { EmptyView() }, action: action)
-    }
-}
-
-/// A footer bar without a Save button, for pages that write as you go.
+/// A page's foot, for actions on the page as a whole. The same height as the
+/// sidebar's foot, so the two rules meet in one line across the window.
 private struct FooterBar<Content: View>: View {
     @ViewBuilder var content: () -> Content
     var body: some View {
         VStack(spacing: 0) {
             Rule()
             HStack(spacing: 8) { content() }
-                .padding(.horizontal, Looped.gutter).padding(.vertical, 6)
+                .padding(.horizontal, Looped.gutter)
+                .frame(height: Looped.footHeight)
         }
     }
 }
@@ -252,27 +300,84 @@ private func options<T: CaseIterable & RawRepresentable>(
     T.allCases.map { ($0.rawValue, label($0)) }
 }
 
+// MARK: - Status
+
+/// A key to the menu bar icon: each state drawn exactly as the menu bar draws
+/// it, with what it means. The state the app is in right now is marked.
+private struct StatusTab: View {
+    @ObservedObject var state: AppState
+    @Environment(\.colorScheme) private var colorScheme
+
+    private struct Row: Identifiable {
+        let id: String
+        let status: AppStatus
+        let colour: String
+        let title: String
+        let meaning: String
+    }
+
+    private let rows = [
+        Row(id: "idle", status: .idle, colour: "No colour", title: "Ready",
+            meaning: "Nothing is happening. Hold your shortcut to start dictating."),
+        Row(id: "recording", status: .recording, colour: "Orange", title: "Recording",
+            meaning: "The microphone is on and Looped Whisper is listening, until you release the key or stop the recording. The same orange macOS shows while the microphone is in use."),
+        Row(id: "working", status: .transcribing, colour: "Violet", title: "Transcribing",
+            meaning: "Turning what you said into text on this Mac, or loading a model. A new recording can't start until this finishes."),
+        Row(id: "rewriting", status: .rewriting, colour: "Green", title: "Rewriting",
+            meaning: "Your AI model is rewriting a selection or repairing a transcript. With a hosted provider, this is the moment text leaves your Mac."),
+        Row(id: "error", status: .error(""), colour: "Oxblood", title: "Needs attention",
+            meaning: "Something went wrong. Open the menu to read what happened and how to fix it. The icon returns to normal after a few seconds."),
+    ]
+
+    private func isCurrent(_ row: Row) -> Bool {
+        switch (row.status, state.status) {
+        case (.idle, .idle), (.recording, .recording), (.error, .error), (.rewriting, .rewriting): return true
+        case (.transcribing, .transcribing), (.transcribing, .loadingModel): return true
+        default: return false
+        }
+    }
+
+    var body: some View {
+        PaneScroll {
+            SettingSection("Menu bar icon") {
+                ForEach(rows) { row in
+                    HStack(alignment: .center, spacing: 18) {
+                        Image(nsImage: MenuBarLabel.icon(for: row.status, dark: colorScheme == .dark))
+                            .renderingMode(row.status == .idle ? .template : .original)
+                            .foregroundStyle(Looped.ink)
+                            .frame(width: 40, alignment: .leading)
+                            .accessibilityHidden(true)
+                        VStack(alignment: .leading, spacing: 3) {
+                            HStack(spacing: 8) {
+                                Text(row.title).font(.sans(13, weight: 500)).foregroundStyle(Looped.ink)
+                                Eyebrow(row.colour)
+                                if isCurrent(row) { LoopedBadge("Now") }
+                            }
+                            Text(row.meaning).lpCaption()
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .padding(.vertical, 14)
+                    .accessibilityElement(children: .combine)
+                    Rule()
+                }
+            }
+        }
+    }
+}
+
 // MARK: - General
 
 private struct GeneralTab: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var loginItem: LoginItemManager
 
-    @State private var mode = d.string(forKey: PrefKey.transcriptionMode) ?? TranscriptionMode.batch.rawValue
-    @State private var realtimeInsertion = d.string(forKey: PrefKey.realtimeInsertion) ?? RealtimeInsertion.onStop.rawValue
     @State private var outputBehavior = d.string(forKey: PrefKey.outputBehavior) ?? OutputBehavior.copyPaste.rawValue
-    @State private var restoreClipboard = d.bool(forKey: PrefKey.restoreClipboard)
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
         self.loginItem = coordinator.loginItem
-    }
-
-    private var isDirty: Bool {
-        mode != d.string(forKey: PrefKey.transcriptionMode)
-        || realtimeInsertion != d.string(forKey: PrefKey.realtimeInsertion)
-        || outputBehavior != d.string(forKey: PrefKey.outputBehavior)
-        || restoreClipboard != d.bool(forKey: PrefKey.restoreClipboard)
     }
 
     var body: some View {
@@ -287,36 +392,16 @@ private struct GeneralTab: View {
                     }
                 }
 
-                SettingSection("Transcription") {
-                    SettingField("Mode") {
-                        LoopedSegmented(selection: $mode,
-                                        options: options(TranscriptionMode.self) { $0.label })
-                    }
-                    Rule()
-                    SettingField("Realtime insertion") {
-                        LoopedSegmented(selection: $realtimeInsertion,
-                                        options: options(RealtimeInsertion.self) { $0.label })
-                    }
-                    .disabled(mode != TranscriptionMode.realtime.rawValue)
-                }
-
                 SettingSection("Output") {
                     SettingField("After transcribing") {
-                        LoopedSegmented(selection: $outputBehavior,
-                                        options: options(OutputBehavior.self) { $0.label })
+                        LoopedSelect(selection: $outputBehavior,
+                                     options: options(OutputBehavior.self) { $0.label })
+                            .frame(width: 240)
                     }
-                    Rule()
-                    SettingRow("Restore previous clipboard after paste") {
-                        LoopedSwitch("Restore previous clipboard after paste", isOn: $restoreClipboard)
-                    }
-                    .disabled(outputBehavior != OutputBehavior.copyPaste.rawValue)
                 }
             }
-            SaveBar(disabled: !isDirty) {
-                d.set(mode, forKey: PrefKey.transcriptionMode)
-                d.set(realtimeInsertion, forKey: PrefKey.realtimeInsertion)
+            AutoSave(key: outputBehavior) {
                 d.set(outputBehavior, forKey: PrefKey.outputBehavior)
-                d.set(restoreClipboard, forKey: PrefKey.restoreClipboard)
             }
         }
         .onAppear { loginItem.refresh() }
@@ -340,12 +425,6 @@ private struct ModelTab: View {
 
     private var storedLanguages: Set<String> {
         WhisperLanguage.codes(from: d.string(forKey: PrefKey.preferredLanguages) ?? "en")
-    }
-
-    private var isDirty: Bool {
-        selectedModel != d.string(forKey: PrefKey.selectedModel)
-        || languages != storedLanguages
-        || languageRepairEnabled != d.bool(forKey: PrefKey.languageRepairEnabled)
     }
 
     private func toggle(_ code: String) {
@@ -421,7 +500,7 @@ private struct ModelTab: View {
                     }
                 }
             }
-            SaveBar(disabled: !isDirty) {
+            AutoSave(key: [selectedModel, WhisperLanguage.string(from: languages), String(languageRepairEnabled)]) {
                 d.set(WhisperLanguage.string(from: languages), forKey: PrefKey.preferredLanguages)
                 d.set(languageRepairEnabled, forKey: PrefKey.languageRepairEnabled)
                 if selectedModel != d.string(forKey: PrefKey.selectedModel) {
@@ -509,12 +588,6 @@ private struct HotkeysTab: View {
     @State private var smartFallback = d.string(forKey: PrefKey.smartRewriteFallback)
         ?? SmartHotkeyFallback.dictate.rawValue
 
-    /// The smart-hotkey settings write themselves, so only the fn options
-    /// participate in Save.
-    private var isDirty: Bool {
-        fnEnabled != d.bool(forKey: PrefKey.fnEnabled) || fnMode != d.string(forKey: PrefKey.fnMode)
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             PaneScroll {
@@ -523,7 +596,7 @@ private struct HotkeysTab: View {
                         KeyboardShortcuts.Recorder(for: .pushToTalk)
                     }
                     Rule()
-                    SettingRow("Toggle recording") {
+                    SettingRow("Toggle dictation", caption: "Press to start, press again to stop.") {
                         KeyboardShortcuts.Recorder(for: .toggleRecording)
                     }
                     Rule()
@@ -531,8 +604,17 @@ private struct HotkeysTab: View {
                         KeyboardShortcuts.Recorder(for: .rewriteSelection)
                     }
                     Rule()
-                    Text("Standard shortcuts save automatically.")
-                        .lpCaption().padding(.vertical, 10)
+                    SettingRow("Paste last dictation", caption: "Pastes your most recent dictation again at the cursor.") {
+                        KeyboardShortcuts.Recorder(for: .pasteLastDictation)
+                    }
+                    Rule()
+                    HStack {
+                        Text("Shortcuts save as you record them.").lpCaption()
+                        Spacer()
+                        Button("Reset to Defaults") { HotkeyManager.resetShortcutsToDefaults() }
+                            .buttonStyle(.secondaryCompact)
+                    }
+                    .padding(.vertical, 10)
                 }
 
                 SettingSection("Smart push to talk") {
@@ -578,7 +660,7 @@ private struct HotkeysTab: View {
                     .padding(.vertical, 12)
                 }
             }
-            SaveBar(disabled: !isDirty) {
+            AutoSave(key: [String(fnEnabled), fnMode]) {
                 d.set(fnEnabled, forKey: PrefKey.fnEnabled)
                 d.set(fnMode, forKey: PrefKey.fnMode)
                 coordinator.configureFnMonitor()
@@ -604,15 +686,11 @@ private struct SoundsTab: View {
         perEvent = map
     }
 
-    private var isDirty: Bool {
-        if enabled != d.bool(forKey: PrefKey.soundsEnabled) { return true }
-        if volume != d.double(forKey: PrefKey.soundVolume) { return true }
-        for e in SoundEvent.allCases {
-            guard let v = perEvent[e.rawValue] else { continue }
-            if v.on != d.bool(forKey: e.enabledKey) { return true }
-            if v.name != (d.string(forKey: e.nameKey) ?? e.defaultSound) { return true }
-        }
-        return false
+    /// Everything on the page, as one value to watch for changes.
+    private var soundsSignature: String {
+        "\(enabled)|\(volume)|" + SoundEvent.allCases.map { e in
+            "\(perEvent[e.rawValue]?.on ?? true):\(perEvent[e.rawValue]?.name ?? e.defaultSound)"
+        }.joined(separator: ",")
     }
 
     var body: some View {
@@ -661,7 +739,7 @@ private struct SoundsTab: View {
                     }
                 }
             }
-            SaveBar(disabled: !isDirty) {
+            AutoSave(key: soundsSignature) {
                 d.set(enabled, forKey: PrefKey.soundsEnabled)
                 d.set(volume, forKey: PrefKey.soundVolume)
                 for e in SoundEvent.allCases {
@@ -736,6 +814,206 @@ private struct VocabularyTab: View {
     private func add() { vocabulary.add(newTerm); newTerm = "" }
 }
 
+// MARK: - History
+
+/// The dictation log. Each entry can be copied, deleted, or corrected to what
+/// was meant; corrections are what the app learns from.
+private struct HistoryTab: View {
+    @ObservedObject var coordinator: Coordinator
+    @ObservedObject private var history: DictationHistory
+    @ObservedObject private var corrections: CorrectionStore
+    @State private var search = ""
+    @State private var editing: DictationHistory.Entry?
+    @State private var confirmingClear = false
+    @State private var shown = 50
+    @State private var lastLearned: String?
+
+    init(coordinator: Coordinator) {
+        self.coordinator = coordinator
+        self.history = coordinator.history
+        self.corrections = coordinator.corrections
+    }
+
+    private var matches: [DictationHistory.Entry] {
+        let query = search.trimmingCharacters(in: .whitespaces)
+        guard !query.isEmpty else { return history.entries }
+        return history.entries.filter { $0.text.localizedCaseInsensitiveContains(query) }
+    }
+
+    private static let stamp: DateFormatter = {
+        let f = DateFormatter()
+        f.dateStyle = .medium
+        f.timeStyle = .short
+        f.doesRelativeDateFormatting = true
+        return f
+    }()
+
+    var body: some View {
+        VStack(spacing: 0) {
+            PaneScroll {
+                if !corrections.replacements.isEmpty { learnedSection }
+
+                SettingSection(history.entries.isEmpty ? "Dictations"
+                               : "\(history.entries.count) \(history.entries.count == 1 ? "dictation" : "dictations")") {
+                    if history.entries.isEmpty {
+                        EmptyState(title: "Nothing dictated yet",
+                                   message: "Each dictation appears here once it has been transcribed.")
+                    } else {
+                        LoopedField(placeholder: "Search", text: $search)
+                            .padding(.vertical, 10)
+                        Rule()
+                        if matches.isEmpty {
+                            EmptyState(title: "No matches", message: "No dictation contains “\(search)”.")
+                        }
+                        ForEach(matches.prefix(shown)) { entry in
+                            row(entry)
+                            Rule()
+                        }
+                        if matches.count > shown {
+                            Button("Show \(min(50, matches.count - shown)) more") { shown += 50 }
+                                .buttonStyle(.quietLink)
+                                .padding(.vertical, 12)
+                        }
+                    }
+                }
+            }
+            FooterBar {
+                PathRow(icon: "doc.text", path: history.fileURL.path) {
+                    Button("Reveal") { history.revealInFinder() }.buttonStyle(.secondaryCompact)
+                    Button("Clear History…") { confirmingClear = true }
+                        .buttonStyle(.destructiveCompact)
+                        .disabled(history.entries.isEmpty)
+                }
+            }
+        }
+        .sheet(item: $editing) { entry in
+            CorrectionEditor(entry: entry) { text in
+                let learned = coordinator.correctDictation(entry.id, to: text)
+                lastLearned = learned == 0 ? nil
+                    : "Learned \(learned) \(learned == 1 ? "correction" : "corrections") from that."
+            }
+        }
+        .confirmationDialog("Clear all dictation history?", isPresented: $confirmingClear,
+                            titleVisibility: .visible) {
+            Button("Clear History", role: .destructive) { history.clear() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes the log of what you dictated. What the app has learned from your corrections is kept.")
+        }
+    }
+
+    private func row(_ entry: DictationHistory.Entry) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Eyebrow(Self.stamp.string(from: entry.date))
+                if entry.isCorrected { LoopedBadge("Corrected", tint: Looped.moss) }
+                Spacer()
+                Button("Correct") { editing = entry }.buttonStyle(.secondaryCompact)
+                    .help("Rewrite this to what you meant, so the app learns from it")
+                Button { ClipboardService.set(entry.text) } label: { Image(systemName: "doc.on.doc") }
+                    .buttonStyle(.icon).help("Copy")
+                Button { history.delete(entry.id) } label: { Image(systemName: "trash") }
+                    .buttonStyle(.icon).help("Delete")
+            }
+            Text(entry.text).font(.sans(13)).foregroundStyle(Looped.ink)
+                .lineSpacing(2)
+                .textSelection(.enabled)
+                .fixedSize(horizontal: false, vertical: true)
+            if let original = entry.original {
+                Text("Transcribed as: \(original)").lpCaption()
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    /// What correcting has taught the app, each one removable.
+    private var learnedSection: some View {
+        SettingSection("Learned corrections") {
+            Text(lastLearned ?? "Applied to every new dictation. Remove one if it starts changing words it shouldn't.")
+                .lpCaption().padding(.vertical, 10)
+            Rule()
+            ForEach(corrections.replacements) { item in
+                HStack(spacing: 8) {
+                    Text(item.heard).font(.mono(12)).foregroundStyle(Looped.ink2)
+                    Image(systemName: "arrow.right")
+                        .font(.system(size: 9, weight: .medium)).foregroundStyle(Looped.ink3)
+                    Text(item.meant).font(.mono(12)).foregroundStyle(Looped.ink)
+                    Spacer()
+                    Button { corrections.remove(item) } label: { Image(systemName: "xmark") }
+                        .buttonStyle(.icon).help("Stop making this correction")
+                }
+                .padding(.vertical, 7)
+                Rule()
+            }
+        }
+    }
+}
+
+/// Rewriting one dictation to what was meant.
+private struct CorrectionEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    let entry: DictationHistory.Entry
+    let onSave: (String) -> Void
+    @State private var text: String
+
+    init(entry: DictationHistory.Entry, onSave: @escaping (String) -> Void) {
+        self.entry = entry
+        self.onSave = onSave
+        _text = State(initialValue: entry.text)
+    }
+
+    private var changed: Bool {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmed.isEmpty && trimmed != entry.text
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Correct dictation")
+                .font(.sans(20, weight: 500)).tracking(-0.5)
+                .padding(.bottom, 6)
+            Text("Change it to what you meant. Words you replace are fixed in future dictations, names join your vocabulary, and the rewrite model sees the correction.")
+                .lpCaption().fixedSize(horizontal: false, vertical: true)
+                .padding(.bottom, 14)
+
+            TextEditor(text: $text)
+                .font(.sans(13))
+                .scrollContentBackground(.hidden)
+                .padding(8)
+                .frame(height: 180)
+                .background(RoundedRectangle(cornerRadius: Looped.radius).fill(Looped.paper))
+                .overlay(RoundedRectangle(cornerRadius: Looped.radius).strokeBorder(Looped.ruleStrong))
+
+            if let original = entry.original {
+                Text("Transcribed as: \(original)").lpCaption()
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 10)
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                Button("Cancel") { dismiss() }
+                    .buttonStyle(.secondary)
+                    .keyboardShortcut(.cancelAction)
+                Button("Save Correction") {
+                    onSave(text)
+                    dismiss()
+                }
+                .buttonStyle(.primary)
+                .keyboardShortcut(.return, modifiers: .command)
+                .disabled(!changed)
+            }
+            .padding(.top, 14)
+        }
+        .padding(24)
+        .frame(width: 520)
+        .font(.sans(13))
+        .foregroundStyle(Looped.ink)
+        .background(Looped.paper)
+    }
+}
+
 // MARK: - AI
 
 /// The one model configuration in the app. Everything that needs an LLM —
@@ -748,13 +1026,6 @@ private struct AITab: View {
     @State private var apiKey = ""
 
     private var storedKey: String { Keychain.get(account: RewriteService.keychainAccount) ?? "" }
-    private var isDirty: Bool {
-        provider != d.string(forKey: PrefKey.aiProvider)
-        || model != d.string(forKey: PrefKey.aiModel)
-        || baseURL != d.string(forKey: PrefKey.aiBaseURL)
-        || apiKey != storedKey
-    }
-
     var body: some View {
         VStack(spacing: 0) {
             PaneScroll {
@@ -801,11 +1072,11 @@ private struct AITab: View {
                     }
                 }
             }
-            SaveBar(disabled: !isDirty) {
+            AutoSave(key: [provider, model, baseURL, apiKey]) {
                 d.set(provider, forKey: PrefKey.aiProvider)
                 d.set(model, forKey: PrefKey.aiModel)
                 d.set(baseURL, forKey: PrefKey.aiBaseURL)
-                Keychain.set(apiKey, account: RewriteService.keychainAccount)
+                if apiKey != storedKey { Keychain.set(apiKey, account: RewriteService.keychainAccount) }
             }
         }
         .onAppear { apiKey = storedKey }
@@ -1314,7 +1585,6 @@ private struct PermissionsTab: View {
                 Spacer()
                 Button("Quit & Relaunch") { permissions.quitAndRelaunch() }
                     .buttonStyle(.primary)
-                    .padding(.vertical, 6)
             }
         }
         .confirmationDialog(
@@ -1354,7 +1624,6 @@ private struct PermissionsTab: View {
 private struct AboutTab: View {
     @ObservedObject var coordinator: Coordinator
     @ObservedObject private var updates: UpdateChecker
-    @AppStorage(PrefKey.telemetryEnabled) private var telemetryEnabled = false
 
     init(coordinator: Coordinator) {
         self.coordinator = coordinator
@@ -1431,21 +1700,6 @@ private struct AboutTab: View {
                 .fixedSize(horizontal: false, vertical: true)
                 .frame(maxWidth: 480, alignment: .leading)
                 .padding(.top, 18)
-
-            if Telemetry.isAvailable {
-                SettingSection("Privacy") {
-                    SettingRow("Share anonymous usage data",
-                               caption: "Sends app launches, whether recordings and model loads worked, crash types, and your app version, macOS version and model to PostHog. Never your audio, transcripts, selected text, vocabulary or which apps you use.") {
-                        LoopedSwitch("Share anonymous usage data", isOn: Binding(
-                            get: { telemetryEnabled },
-                            set: { on in
-                                Telemetry.setEnabled(on)
-                                telemetryEnabled = on
-                            }))
-                    }
-                    Rule()
-                }
-            }
 
             SettingSection("Links") {
                 HStack(spacing: 16) {

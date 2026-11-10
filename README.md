@@ -27,10 +27,12 @@ transcribed text is copied to the clipboard and pasted at your cursor.
 - ⌨️ **Global hotkeys** — push-to-talk (hold) and start/stop toggle, configurable.
 - 🌐 **fn / Globe key support** — hold-to-talk or double-tap-to-toggle (see caveats).
 - 📋 **Auto clipboard + paste** at the cursor.
-- ⚡ **Realtime mode** — live caption as you speak.
 - ✨ **One AI setting** — Anthropic, any OpenAI-compatible endpoint, or Apple's
   on-device model, shared by every feature that needs one (key in Keychain).
 - 📖 **Vocabulary** — bias recognition toward your names / jargon / identifiers.
+- 🗂️ **History you can correct** — every dictation is kept on your Mac. Rewrite one
+  to what you meant and the fix is applied to future dictations, names join your
+  vocabulary, and the rewrite model sees the correction.
 - ✍️ **Rewrite my selection** — select text anywhere, hold a hotkey, say what you
   want ("make it shorter", "fix the typos"), and it's replaced in place in your
   own writing style. See [Rewrite my selection](#rewrite-my-selection).
@@ -94,11 +96,11 @@ Whisper and delivered as-is.
 
 ## Rewrite my selection
 
-Select text in any app, hold **⌃⌥E**, say what you want, and release. The
+Select text in any app, hold **⌃⌥R**, say what you want, and release. The
 selection is replaced in place with a rewrite in your own writing style.
 
 ```
-select text  →  hold ⌃⌥E, say "make it shorter"  →  release  →  text is replaced
+select text  →  hold ⌃⌥R, say "make it shorter"  →  release  →  text is replaced
 ```
 
 Spoken commands are transcribed locally by the same Whisper model as dictation,
@@ -132,7 +134,7 @@ than a rewrite of whatever happened to be on your clipboard.
 ### Your style, in `style.json`
 
 Edit it once at `~/Library/Application Support/Looped Whisper/style.json`
-(**Settings → Style → Reveal**). A starter file is created on first launch.
+(**Settings → Rewrite style → Reveal**). A starter file is created on first launch.
 
 ```jsonc
 {
@@ -187,7 +189,7 @@ templates alongside the base profile:
 
 Name one while you speak — *"rewrite it as an email"*, *"make it shorter as a
 slack message"* — or set `defaultTemplate` (or the picker in **Settings →
-Style**) so one applies whenever you don't say otherwise. An unrecognized name
+Rewrite style**) so one applies whenever you don't say otherwise. An unrecognized name
 falls back to the base rather than failing, since a misheard word shouldn't cost
 you the rewrite.
 
@@ -235,7 +237,7 @@ surrounding quotes) is stripped before anything reaches your document.
 `style.json` is the half you write. The other half the app works out for itself,
 from writing you were doing anyway.
 
-**Three states**, shown in the menu bar and in **Settings → Style**. Rewriting
+**Three states**, shown in the menu bar and in **Settings → Rewrite style**. Rewriting
 always works — it just tells you which one it's in:
 
 | State | What it means |
@@ -261,7 +263,7 @@ paragraph, and sending them anyway argues for the wrong rhythm.
 
 **Mined rules are proposed, never switched on.** Once there's enough evidence,
 "you have never once used an em dash in 40 things you wrote" becomes a suggested
-rule in the Style tab, with the count behind it. One click writes it into
+rule in the Rewrite style tab, with the count behind it. One click writes it into
 `style.json` where you can read it. A rule that enabled itself would be the same
 failure as one that silently didn't apply.
 
@@ -281,11 +283,11 @@ One thing it can't tell: **selected text is assumed to be yours.** Shorten a
 colleague's email or a paragraph from a web page and that prose is harvested as
 your voice. The app knows to skip its own output, but it has no way to know who
 wrote anything else. If you rewrite a lot of other people's text, either turn
-collection off or prune the corpus from the Style tab.
+collection off or prune the corpus from the Rewrite style tab.
 
 ### Local models
 
-**Settings → Style** picks the provider independently of the dictation cleanup,
+**Settings → Rewrite style** picks the provider independently of the dictation cleanup,
 so your prose can go somewhere different from your transcripts. Choose
 _OpenAI-compatible_ and point it at a local server to keep your writing on this
 machine:
@@ -304,26 +306,8 @@ Your audio is transcribed on your Mac and never leaves it. Text only goes to an
 AI provider for features that need one (selection rewrite, language repair, AI
 quick actions), and only to the provider you configured.
 
-**Anonymous usage data is opt-in.** After you install, the app asks once whether
-to share it; nothing is sent unless you say yes, and you can change your answer
-in **Settings → About**. If you opt in, these events go to
-[PostHog](https://posthog.com):
-
-| Event | Properties |
-| --- | --- |
-| `app_launched` | model, mode |
-| `model_loaded` / `model_load_failed` | model, seconds or failure stage and error type |
-| `recording_start_failed` | error type |
-| `recording_finished` | outcome (delivered, empty, failed, …), mode, model, length in seconds, peak loudness |
-| `crash_detected` | crash type and name, the app function it happened in |
-
-Every event also carries the app and macOS version and a random id made only
-for this, which is thrown away if you opt out. No person profile is created.
-Your audio, transcripts, selected text, vocabulary and which apps you use are
-never sent. The full list lives in
-[`Telemetry.swift`](Sources/Whisper/System/Telemetry.swift). Builds without a
-PostHog key (forks, `make build` without `POSTHOG_API_KEY`) contain no telemetry
-and never ask.
+The app sends no usage data, analytics or crash reports. The only network
+requests it makes on its own are model downloads and the update check.
 
 Crash logs are saved locally; the app shows them to you on the next launch and
 you decide whether to share the full log.

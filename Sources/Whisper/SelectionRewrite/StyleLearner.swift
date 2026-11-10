@@ -50,6 +50,14 @@ final class StyleLearner: ObservableObject {
         save()
     }
 
+    /// A correction the user made by hand to a past dictation. An explicit
+    /// act, so it is recorded even with harvesting off: it joins the edits
+    /// shown to the rewrite model, and the rule miner reads it too.
+    func recordCorrection(produced: String, corrected: String) {
+        corpus.addCorrection(produced: produced, corrected: corrected)
+        save()
+    }
+
     /// A freshly captured selection, before it's rewritten. Either the user's
     /// own writing, or a rewrite of ours they've since edited.
     func noteSelection(_ selection: String) {
