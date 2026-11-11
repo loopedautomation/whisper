@@ -3,7 +3,7 @@ import AVFoundation
 import CoreAudio
 
 /// Captures microphone audio and resamples it to the 16 kHz mono Float32 format
-/// Whisper expects. Used for batch mode (the full buffer is returned on `stop`).
+/// Whisper expects. The full buffer is returned on `stop`.
 final class AudioRecorder {
     private let engine = AVAudioEngine()
     private var converter: AVAudioConverter?
@@ -11,6 +11,7 @@ final class AudioRecorder {
     private var samples: [Float] = []
     private let lock = NSLock()
     private(set) var isRunning = false
+    private var configurationObserver: NSObjectProtocol?
 
     /// Whisper's required input format.
     static let targetSampleRate: Double = 16_000
@@ -39,6 +40,14 @@ final class AudioRecorder {
         guard !isRunning else { return }
         lock.lock(); samples.removeAll(keepingCapacity: true); lock.unlock()
 
+        try startEngine()
+        isRunning = true
+        observeConfigurationChanges()
+    }
+
+    /// Points the input node at the chosen device, taps it and starts the
+    /// engine. Shared by `start` and by the rebuild after a device change.
+    private func startEngine() throws {
         let input = engine.inputNode
         // Route capture to the user-selected input device. When the persisted UID is
         // empty (or the device is gone) we leave the input node on the OS default,
@@ -49,7 +58,7 @@ final class AudioRecorder {
         guard let converter = AVAudioConverter(from: inputFormat, to: targetFormat) else {
             throw RecorderError.converterUnavailable
         }
-        self.converter = converter
+        lock.lock(); self.converter = converter; lock.unlock()
 
         input.installTap(onBus: 0, bufferSize: 4096, format: inputFormat) { [weak self] buffer, _ in
             self?.append(buffer: buffer)
@@ -62,13 +71,37 @@ final class AudioRecorder {
             input.removeTap(onBus: 0)
             throw RecorderError.engineStartFailed(error.localizedDescription)
         }
-        isRunning = true
+    }
+
+    /// The engine stops itself when its input changes mid-recording (AirPods
+    /// connect, a USB mic is unplugged). Rebuild it on the new device and keep
+    /// what was captured so far, instead of ending the dictation with half of it.
+    private func observeConfigurationChanges() {
+        guard configurationObserver == nil else { return }
+        configurationObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            guard let self, self.isRunning else { return }
+            self.engine.inputNode.removeTap(onBus: 0)
+            self.engine.stop()
+            do {
+                try self.startEngine()
+            } catch {
+                NSLog("AudioRecorder: couldn't resume after an input change: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    private func stopObservingConfigurationChanges() {
+        if let configurationObserver { NotificationCenter.default.removeObserver(configurationObserver) }
+        configurationObserver = nil
     }
 
     /// Stops capture and returns the accumulated 16 kHz mono samples.
     @discardableResult
     func stop() -> [Float] {
         guard isRunning else { return [] }
+        stopObservingConfigurationChanges()
         engine.inputNode.removeTap(onBus: 0)
         engine.stop()
         isRunning = false
@@ -76,7 +109,36 @@ final class AudioRecorder {
         return result
     }
 
-    /// Current accumulated samples without stopping (used by realtime mode).
+    /// How long capture carries on after the key lifts. People release the key
+    /// as they finish the last word, not after it, and stopping on the instant
+    /// cuts that word off.
+    struct Tail {
+        /// Always record at least this much more.
+        var minimum: TimeInterval = 0.2
+        /// Never more than this, however long the speaker carries on.
+        var maximum: TimeInterval = 0.6
+        /// Stop once the audio has been this quiet for this long.
+        var quiet: TimeInterval = 0.16
+    }
+
+    /// Stops like `stop`, after the tail: a short fixed stretch, extended while
+    /// speech continues. Returns nil if the recording was stopped by something
+    /// else (a cancel) while it waited.
+    @MainActor
+    func stopAfterTail(_ tail: Tail = Tail()) async -> [Float]? {
+        guard isRunning else { return nil }
+        let started = Date()
+        while isRunning {
+            let elapsed = Date().timeIntervalSince(started)
+            if elapsed >= tail.maximum { break }
+            if elapsed >= tail.minimum, AudioLevel.tailIsQuiet(snapshot(), window: tail.quiet) { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        guard isRunning else { return nil }
+        return stop()
+    }
+
+    /// Current accumulated samples without stopping.
     func snapshot() -> [Float] {
         lock.lock(); defer { lock.unlock() }
         return samples
@@ -87,7 +149,11 @@ final class AudioRecorder {
     /// system default input device.
     private func applySelectedInputDevice(to input: AVAudioInputNode) {
         let uid = UserDefaults.standard.string(forKey: PrefKey.inputDeviceUID) ?? ""
-        guard let deviceID = AudioInputDevices.deviceID(forUID: uid) else { return }
+        // An explicit choice is honoured. Left on "System Default", a Bluetooth
+        // headset is passed over for the built-in mic: opening its microphone
+        // drops the headset into call quality for whatever is playing.
+        guard let deviceID = AudioInputDevices.deviceID(forUID: uid)
+            ?? AudioInputDevices.builtInInsteadOfBluetoothDefault() else { return }
 
         // The input node is backed by an HAL audio unit; setting its current device
         // reroutes capture without rebuilding the engine.
@@ -104,6 +170,7 @@ final class AudioRecorder {
     }
 
     private func append(buffer: AVAudioPCMBuffer) {
+        lock.lock(); let converter = self.converter; lock.unlock()
         guard let converter else { return }
 
         let ratio = targetFormat.sampleRate / buffer.format.sampleRate

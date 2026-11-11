@@ -48,7 +48,7 @@ enum OnDeviceAvailability: Equatable {
 /// This is the "no key, no server, nothing to install" provider. The model is
 /// far smaller than a hosted one and its context window is only a few thousand
 /// tokens, so it's positioned as the private/free option rather than the best
-/// one — see the copy in Settings → Style.
+/// one — see the copy in Settings → Rewrite style.
 ///
 /// The whole framework is gated: `canImport` keeps the file building on older
 /// toolchains, and `@available` makes the symbols weak-linked so the app still

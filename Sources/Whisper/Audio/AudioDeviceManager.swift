@@ -55,6 +55,17 @@ final class AudioDeviceManager: ObservableObject {
 
     // MARK: - Core Audio change notifications
 
+    private var pendingRefresh: DispatchWorkItem?
+
+    /// Plugging in one device fires several notifications in a burst; wait for
+    /// them to settle and enumerate once.
+    private func scheduleRefresh() {
+        pendingRefresh?.cancel()
+        let work = DispatchWorkItem { [weak self] in self?.refresh() }
+        pendingRefresh = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25, execute: work)
+    }
+
     private func installListeners() {
         guard !listenersInstalled else { return }
         listenersInstalled = true
@@ -71,7 +82,7 @@ final class AudioDeviceManager: ObservableObject {
             AudioObjectAddPropertyListenerBlock(
                 AudioObjectID(kAudioObjectSystemObject), &address, DispatchQueue.main
             ) { [weak self] _, _ in
-                Task { @MainActor in self?.refresh() }
+                Task { @MainActor in self?.scheduleRefresh() }
             }
         }
     }

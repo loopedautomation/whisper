@@ -7,6 +7,7 @@ struct MenuBarContent: View {
     @ObservedObject private var models: ModelManager
     @ObservedObject private var updates: UpdateChecker
     @ObservedObject private var learner: StyleLearner
+    @ObservedObject private var history: DictationHistory
     @Environment(\.openSettings) private var openSettings
 
     init(coordinator: Coordinator) {
@@ -16,11 +17,16 @@ struct MenuBarContent: View {
         self.models = coordinator.models
         self.updates = coordinator.updateChecker
         self.learner = coordinator.learner
+        self.history = coordinator.history
     }
 
     var body: some View {
-        Text(appName)
+        Button("Open Looped") {
+            if let url = URL(string: "https://app.looped.sh") { NSWorkspace.shared.open(url) }
+        }
         Divider()
+
+        Text(appName)
 
         Text(state.status.menuLabel)
 
@@ -63,6 +69,22 @@ struct MenuBarContent: View {
         if !state.lastTranscript.isEmpty {
             Button("Copy Last Transcript") {
                 ClipboardService.set(state.lastTranscript)
+            }
+        }
+
+        if !history.entries.isEmpty {
+            Button("Paste Last Dictation") {
+                coordinator.pasteLastDictation()
+            }
+            .disabled(state.isRecording || state.isBusy)
+
+            // The latest of the log in Settings → History; choosing one copies it.
+            Menu("Recent Dictations") {
+                ForEach(history.entries.prefix(10)) { entry in
+                    Button(Self.preview(entry.text)) { ClipboardService.set(entry.text) }
+                }
+                Divider()
+                Button("Clear History") { history.clear() }
             }
         }
 
@@ -123,6 +145,12 @@ struct MenuBarContent: View {
             NSApp.terminate(nil)
         }
         .keyboardShortcut("q")
+    }
+
+    /// One menu line's worth of a dictation.
+    nonisolated static func preview(_ text: String, limit: Int = 48) -> String {
+        let line = text.split(whereSeparator: \.isNewline).joined(separator: " ")
+        return line.count > limit ? String(line.prefix(limit)) + "…" : line
     }
 
     private var appName: String {

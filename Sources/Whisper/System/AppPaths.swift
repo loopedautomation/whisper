@@ -40,6 +40,12 @@ enum AppPaths {
 
     static let quickActionsFile = support.appendingPathComponent("quick-actions.json")
     /// Hand-edited writing-style config for the selection rewrite.
+    /// Recent dictations, text only (see `DictationHistory`).
+    static let historyFile = support.appendingPathComponent("history.json")
+
+    /// Word swaps learned from corrected dictations (see `CorrectionStore`).
+    static let correctionsFile = support.appendingPathComponent("corrections.json")
+
     static let styleFile = support.appendingPathComponent("style.json")
     /// Learned writing style: the user's own samples and their edits to past
     /// rewrites. Derived data, never leaves the machine except as the few

@@ -86,11 +86,13 @@ final class PermissionsManager: ObservableObject {
     }
 
     // Deep links into the relevant System Settings panes.
+    // These two open with a guide on the Settings window: the app as a tile
+    // to drag into the list.
     func openAccessibilitySettings() {
-        open("x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility")
+        PermissionGuide.shared.show(.accessibility)
     }
     func openInputMonitoringSettings() {
-        open("x-apple.systempreferences:com.apple.preference.security?Privacy_ListenEvent")
+        PermissionGuide.shared.show(.inputMonitoring)
     }
     func openMicrophoneSettings() {
         open("x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone")

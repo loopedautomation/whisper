@@ -5,10 +5,7 @@ import AppKit
 /// Keys for `@AppStorage` / `UserDefaults`-backed preferences.
 enum PrefKey {
     static let selectedModel = "selectedModel"
-    static let transcriptionMode = "transcriptionMode"   // "batch" | "realtime"
     static let outputBehavior = "outputBehavior"          // "copyPaste" | "copyOnly"
-    static let restoreClipboard = "restoreClipboard"
-    static let realtimeInsertion = "realtimeInsertion"    // "incremental" | "onStop"
     static let fnEnabled = "fnEnabled"
     static let fnMode = "fnMode"                           // "holdPTT" | "doubleTapToggle"
     // One model configuration, shared by everything that talks to an LLM:
@@ -29,10 +26,6 @@ enum PrefKey {
     static let quickActionsEnabled = "quickActionsEnabled"        // opt-in voice quick actions
     static let quickActionsLLMFallback = "quickActionsLLMFallback" // opt-in: AI intent detection when no trigger matches (sends transcript to your AI provider)
     static let quickActionsModifier = "quickActionsModifier"      // modifier held at recording start to arm quick actions; "none" = always armed
-    static let telemetryEnabled = "telemetryEnabled"              // opt-in anonymous usage events (see Telemetry); off until the user says yes
-    static let telemetryPrompted = "telemetryPrompted"            // the user has answered the telemetry prompt
-    static let telemetryDistinctID = "telemetryDistinctID"        // random id, only for telemetry; dropped when it's turned off
-    static let telemetryReportedCrashes = "telemetryReportedCrashes" // crash log file names already reported
 }
 
 /// Modifier key that must be held when recording starts for quick actions to
@@ -63,22 +56,10 @@ enum QuickActionModifier: String, CaseIterable, Identifiable {
     }
 }
 
-enum TranscriptionMode: String, CaseIterable, Identifiable {
-    case batch, realtime
-    var id: String { rawValue }
-    var label: String { self == .batch ? "Batch (on stop)" : "Realtime (live)" }
-}
-
 enum OutputBehavior: String, CaseIterable, Identifiable {
     case copyPaste, copyOnly
     var id: String { rawValue }
     var label: String { self == .copyPaste ? "Copy & paste at cursor" : "Copy to clipboard only" }
-}
-
-enum RealtimeInsertion: String, CaseIterable, Identifiable {
-    case incremental, onStop
-    var id: String { rawValue }
-    var label: String { self == .incremental ? "Insert confirmed text live" : "Paste once on stop" }
 }
 
 enum FnMode: String, CaseIterable, Identifiable {
@@ -238,6 +219,32 @@ enum DefaultPref {
         ["rewriteEnabled", "rewritePrompt"].forEach(d.removeObject(forKey:))
     }
 
+    /// Bumped whenever a release retires or reshapes a stored setting.
+    static let settingsVersion = 2
+    static let settingsVersionKey = "settingsVersion"
+
+    /// Settings that earlier versions stored and this one no longer has.
+    /// Version 2 removed realtime mode, made clipboard restore permanent, and
+    /// removed usage telemetry along with the random ID it kept.
+    static let retiredKeys = [
+        "transcriptionMode", "realtimeInsertion", "restoreClipboard",
+        "telemetryEnabled", "telemetryPrompted", "telemetryDistinctID", "telemetryReportedCrashes",
+    ]
+
+    /// Brings an older install's stored settings up to this version, once, on
+    /// the first launch after updating. Nothing the user chose that still
+    /// exists is touched: retired settings are dropped, so they can't come
+    /// back to life if a later version reuses a name, and everything else
+    /// keeps its value. Someone who had realtime mode selected simply gets
+    /// ordinary dictation.
+    ///
+    /// Safe to run on a fresh install and safe to run twice.
+    static func migrateRetiredSettings(_ d: UserDefaults = .standard) {
+        guard d.integer(forKey: settingsVersionKey) < settingsVersion else { return }
+        retiredKeys.forEach(d.removeObject(forKey:))
+        d.set(settingsVersion, forKey: settingsVersionKey)
+    }
+
     static func registerDefaults() {
         var defaults: [String: Any] = [:]
         for event in SoundEvent.allCases {
@@ -249,10 +256,7 @@ enum DefaultPref {
             PrefKey.soundsEnabled: true,
             PrefKey.soundVolume: 1.0,
             PrefKey.selectedModel: "base",
-            PrefKey.transcriptionMode: TranscriptionMode.batch.rawValue,
             PrefKey.outputBehavior: OutputBehavior.copyPaste.rawValue,
-            PrefKey.restoreClipboard: false,
-            PrefKey.realtimeInsertion: RealtimeInsertion.onStop.rawValue,
             PrefKey.fnEnabled: false,
             PrefKey.fnMode: FnMode.holdPTT.rawValue,
             PrefKey.aiProvider: RewriteProvider.anthropic.rawValue,
@@ -267,8 +271,7 @@ enum DefaultPref {
             PrefKey.inputDeviceUID: "",   // follow system default
             PrefKey.quickActionsEnabled: false,
             PrefKey.quickActionsLLMFallback: false,
-            PrefKey.quickActionsModifier: QuickActionModifier.command.rawValue,
-            PrefKey.telemetryEnabled: false
+            PrefKey.quickActionsModifier: QuickActionModifier.command.rawValue
         ])
     }
 }

@@ -9,6 +9,8 @@ extension KeyboardShortcuts.Name {
     /// Hold to rewrite the current selection: copy it, speak an instruction,
     /// paste the rewrite back in place on release.
     static let rewriteSelection = Self("rewriteSelection")
+    /// Press to paste the most recent dictation again, wherever the cursor is.
+    static let pasteLastDictation = Self("pasteLastDictation")
 }
 
 /// Binds the standard modifier-combo global shortcuts to the coordinator.
@@ -22,21 +24,26 @@ final class HotkeyManager {
         self.coordinator = coordinator
     }
 
-    /// Ships sensible default global shortcuts on first launch (only if the user
-    /// hasn't set their own). These use Carbon hotkeys and need no permissions.
-    ///   • Push to talk (hold):  ⌃⌥Space
-    ///   • Toggle recording:     ⌃⌥R
-    ///   • Rewrite selection:    ⌃⌥E
+    /// The shortcuts the app ships with. They use Carbon hotkeys and need no
+    /// permissions.
+    static let defaults: [(name: KeyboardShortcuts.Name, shortcut: KeyboardShortcuts.Shortcut)] = [
+        (.pushToTalk,         .init(.space, modifiers: [.control, .option])),   // ⌃⌥Space, hold
+        (.toggleRecording,    .init(.d, modifiers: [.control, .option])),       // ⌃⌥D
+        (.rewriteSelection,   .init(.r, modifiers: [.control, .option])),       // ⌃⌥R, hold
+        (.pasteLastDictation, .init(.v, modifiers: [.control, .option])),       // ⌃⌥V
+    ]
+
+    /// Gives any shortcut that has none its default: on first launch, and for
+    /// a shortcut added by an update.
     static func installDefaultShortcutsIfNeeded() {
-        if KeyboardShortcuts.getShortcut(for: .pushToTalk) == nil {
-            KeyboardShortcuts.setShortcut(.init(.space, modifiers: [.control, .option]), for: .pushToTalk)
+        for item in defaults where KeyboardShortcuts.getShortcut(for: item.name) == nil {
+            KeyboardShortcuts.setShortcut(item.shortcut, for: item.name)
         }
-        if KeyboardShortcuts.getShortcut(for: .toggleRecording) == nil {
-            KeyboardShortcuts.setShortcut(.init(.r, modifiers: [.control, .option]), for: .toggleRecording)
-        }
-        if KeyboardShortcuts.getShortcut(for: .rewriteSelection) == nil {
-            KeyboardShortcuts.setShortcut(.init(.e, modifiers: [.control, .option]), for: .rewriteSelection)
-        }
+    }
+
+    /// Puts every shortcut back to its default, replacing the user's own.
+    static func resetShortcutsToDefaults() {
+        for item in defaults { KeyboardShortcuts.setShortcut(item.shortcut, for: item.name) }
     }
 
     func register() {
@@ -58,6 +65,9 @@ final class HotkeyManager {
         }
         KeyboardShortcuts.onKeyUp(for: .rewriteSelection) { [weak self] in
             self?.coordinator?.endSelectionRewrite()
+        }
+        KeyboardShortcuts.onKeyUp(for: .pasteLastDictation) { [weak self] in
+            self?.coordinator?.pasteLastDictation()
         }
     }
 }
